@@ -63,3 +63,9 @@ MIT License
 ---
 
 **注意**: 请确保遵守 Cloudflare 服务条款，合理使用免费额度。
+
+## 🙏 致谢
+
+- [Cloudflare Workers](https://workers.cloudflare.com/) - 提供免费的边缘计算服务
+- [CMLiussss](https://github.com/cmliu/edgetunnel) - 参考大佬的代码
+- [[kuangbao]](https://github.com/Meibidi/kuangbao)- 以大佬的代码为模板ai修改出的本项目
