@@ -17,10 +17,10 @@
 
 | 变量名 | 说明 | 示例值 |
 |--------|------|--------|
-| `USER_ID` | 访问密钥 | `my-secret-key` |
-| `UUID` | VLESS UUID | `5aba5b77-48eb-4ae2-b60d-5bfee7ac169e` |
+| `USER_ID` | 访问密钥 | `123456` |
+| `UUID` | VLESS UUID | `aaa6b096-1165-4bbe-935c-99f4ec902d02` |
 | `NODE_NAME` | 节点名称 | `CF-Worker` |
-| `PROXY_IPS` | 代理IP列表 | `1.1.1.1` |
+| `PROXY_IPS` | 代理IP列表 | `www.visa.com` |
 | `FALLBACK_PROXY` | 备用代理 | `sjc.o00o.ooo:443` |
 | `ENABLE_FALLBACK` | 启用备用代理 | `true` |
 | `ENABLE_NAT64` | 启用NAT64 | `false` |
