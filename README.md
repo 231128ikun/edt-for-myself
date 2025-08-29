@@ -11,6 +11,8 @@
 3. 复制 [_worker.js](https://github.com/231128ikun/edt-for-myself/blob/main/_worker.js) 代码到编辑器
 4. 点击 `Save and Deploy`
 
+   （也可将代码保存为名"_worker"的zip压缩包上传pages部署，优点有pages分配的域名很多地方可以直接访问，缺点就是每次修改变量要重新上传一次压缩包部署）
+
 ### 2. 配置环境变量
 
 在 Worker 设置页面，添加以下环境变量：
