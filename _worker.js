@@ -5,7 +5,7 @@ class Config {
   constructor(env, url) {
     this.userId = env?.USER_ID || '123456';
     this.uuid = env?.UUID || 'aaa6b096-1165-4bbe-935c-99f4ec902d02';
-    this.bestIPs = this.parseList(env?.BEST_IPS) || ['developers.cloudflare.com','ip.sb','www.visa.cn'];
+    this.bestIPs = this.parseList(env?.BEST_IPS) || ['developers.cloudflare.com','ip.sb','www.visa.cn','ikun.glimmer.cf.090227.xyz'];
     this.proxyIP = url?.searchParams.get('proxyip') || env?.PROXY_IP || 'sjc.o00o.ooo:443';
     this.enableNAT64 = env?.ENABLE_NAT64 === 'true';
     this.nodeName = env?.NODE_NAME || 'CF-vless';
