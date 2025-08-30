@@ -1,17 +1,13 @@
 import { connect } from 'cloudflare:sockets';
-
-// 极简配置 - 移除不必要的类封装
 const CFG = {
   userId: '123456',
   uuid: 'aaa6b096-1165-4bbe-935c-99f4ec902d02', 
-  proxyIPs: ['developers.cloudflare.com:443', 'www.visa.com:443'], // ProxyIP列表
-  fallback: 'sjc.o00o.ooo:443', // 备用代理
+  bestIPs: ['developers.cloudflare.com:443', 'www.visa.com:443'], // 优选IP列表
+  proxyIP: 'sjc.o00o.ooo:443', // 代理IP（当节点不可访问时的备用）
   nodeName: 'CF-vless'
 };
-
 // UUID直接转换为字节数组，避免重复解析
 const uuidBytes = new Uint8Array(CFG.uuid.replace(/-/g, '').match(/.{2}/g).map(b => parseInt(b, 16)));
-
 // 主处理函数 - 热路径优先
 export default {
   async fetch(request, env) {
@@ -56,17 +52,17 @@ export default {
         dataStart += 16;
       }
       
-      // 建立TCP连接 - 简化连接逻辑
+      // 建立TCP连接 
       let tcpSocket;
       try {
         // 直接尝试连接，让系统处理错误
         tcpSocket = connect({ hostname, port });
         await tcpSocket.opened;
       } catch {
-        // 失败则使用备用代理
+        // 失败则使用代理IP
         try {
-          const [fallbackHost, fallbackPort = '443'] = CFG.fallback.split(':');
-          tcpSocket = connect({ hostname: fallbackHost, port: Number(fallbackPort) });
+          const [proxyHost, proxyPort = '443'] = CFG.proxyIP.split(':');
+          tcpSocket = connect({ hostname: proxyHost, port: Number(proxyPort) });
           await tcpSocket.opened;
         } catch {
           return new Response(null, { status: 502 });
@@ -178,8 +174,8 @@ export default {
       <button class="btn" onclick="navigator.clipboard.writeText(document.getElementById('subUrl').textContent)">复制</button>
     </div>
     <div class="info">
-      <strong>ProxyIP节点:</strong> ${CFG.proxyIPs.length} 个<br>
-      <strong>备用代理:</strong> ${CFG.fallback}
+      <strong>优选IP节点:</strong> ${CFG.bestIPs.length} 个<br>
+      <strong>代理IP:</strong> ${CFG.proxyIP}
     </div>
   </div>
 </body>
@@ -190,15 +186,15 @@ export default {
     }
     
     if (url.pathname === `/${CFG.userId}/vless`) {
-      // 生成VLESS配置 - 包含所有ProxyIP
+      // 生成VLESS配置 - 包含所有优选IP
       const configs = [];
       
       // 添加主节点
       configs.push(`vless://${CFG.uuid}@${host}:443?encryption=none&security=tls&type=ws&host=${host}&sni=${host}&path=%2F%3Fed%3D2560#${CFG.nodeName}-Main`);
       
-      // 添加所有ProxyIP节点
-      for (const proxyIP of CFG.proxyIPs) {
-        const [addr, port = '443'] = proxyIP.split(':');
+      // 添加所有优选IP节点
+      for (const bestIP of CFG.bestIPs) {
+        const [addr, port = '443'] = bestIP.split(':');
         const nodeName = addr.replace(/\./g, '-');
         configs.push(`vless://${CFG.uuid}@${addr}:${port}?encryption=none&security=tls&type=ws&host=${host}&sni=${host}&path=%2F%3Fed%3D2560#${CFG.nodeName}-${nodeName}`);
       }
