@@ -1,5 +1,6 @@
 import { connect } from 'cloudflare:sockets';
 
+// 环境变量配置
 class Config {
   constructor(env, url) {
     this.userId = env?.USER_ID || '123456';
@@ -16,6 +17,7 @@ class Config {
   }
 }
 
+// 快速路径：直接处理核心逻辑，让CF底层处理错误
 const fastConnect = async (hostname, port, config) => {
   const attempts = [
     () => connect({ hostname, port }),
@@ -32,9 +34,9 @@ const fastConnect = async (hostname, port, config) => {
       const socket = await attempt();
       await socket.opened;
       return socket;
-    } catch {}
+    } catch {} // CF底层处理错误细节
   }
-  throw new Error('Connection failed');
+  throw new Error('No connection');
 };
 
 const fastParse = buffer => {
@@ -54,20 +56,11 @@ const fastParse = buffer => {
 
 const tunnel = (ws, socket, data) => {
   const writer = socket.writable.getWriter();
-  
   ws.send(new Uint8Array([0, 0]));
-  data && writer.write(data).catch(() => {});
+  data && writer.write(data);
   
-  ws.addEventListener('message', ({ data }) => 
-    writer.write(new Uint8Array(data)).catch(() => ws.close())
-  );
-  
-  socket.readable.pipeTo(new WritableStream({ 
-    write: chunk => ws.readyState === WebSocket.OPEN && ws.send(chunk),
-    abort: () => ws.close()
-  })).catch(() => {});
-  
-  ws.addEventListener('close', () => writer.close().catch(() => {}));
+  ws.addEventListener('message', ({ data }) => writer.write(new Uint8Array(data)));
+  socket.readable.pipeTo(new WritableStream({ write: chunk => ws.send(chunk) }));
 };
 
 const html = (config, host) => `<!DOCTYPE html>
@@ -95,7 +88,7 @@ h1{text-align:center;color:#333;margin-bottom:15px}
 <h3>订阅</h3>
 <div class="box"><div class="text" id="s">https://${host}/${config.userId}/vless</div><button class="btn" onclick="cp('s',this)">复制</button></div>
 <h3>节点</h3>
-<div class="box"><div class="text" id="n">vless://${config.uuid}@${config.bestIPs[0] || host}:443?encryption=none&security=tls&sni=${host}&fp=randomized&allowInsecure=1&type=ws&host=${host}&path=%2F%3Fed%3D2560#${config.nodeName}</div><button class="btn" onclick="cp('n',this)">复制</button></div>
+<div class="box"><div class="text" id="n">vless://${config.uuid}@${config.bestIPs[0] || host}:443?encryption=none&security=tls&type=ws&host=${host}&sni=${host}&path=%2F%3Fed%3D2560#${config.nodeName}</div><button class="btn" onclick="cp('n',this)">复制</button></div>
 </div>
 <script>
 function cp(id,btn){
@@ -109,56 +102,50 @@ setTimeout(()=>{btn.textContent=o;btn.classList.remove('ok')},800);
 const genConfig = (host, config) => 
   [...config.bestIPs, `${host}:443`].map(ip => {
     const [addr, port = 443] = ip.split(':');
-    return `vless://${config.uuid}@${addr}:${port}?encryption=none&security=tls&sni=${host}&fp=randomized&allowInsecure=1&type=ws&host=${host}&path=%2F%3Fed%3D2560#${config.nodeName}`;
+    return `vless://${config.uuid}@${addr}:${port}?encryption=none&security=tls&type=ws&host=${host}&sni=${host}&path=%2F%3Fed%3D2560#${config.nodeName}`;
   }).join('\n');
 
 export default {
   async fetch(request, env) {
-    try {
-      const url = new URL(request.url);
-      const config = new Config(env, url);
-      const host = request.headers.get('Host');
+    const url = new URL(request.url);
+    const config = new Config(env, url);
+    const host = request.headers.get('Host');
 
-      if (request.headers.get('Upgrade') === 'websocket') {
-        const protocol = request.headers.get('sec-websocket-protocol');
-        if (!protocol) return new Response('Bad Request', { status: 400 });
-        
-        try {
-          const protocolData = Uint8Array.from(atob(protocol.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
-          const receivedUUID = protocolData.slice(1, 17);
-          
-          if (!receivedUUID.every((b, i) => b === config.uuidBytes[i])) {
-            return new Response('Forbidden', { status: 403 });
-          }
-
-          const { hostname, port, data } = fastParse(protocolData.buffer);
-          const socket = await fastConnect(hostname, port, config);
-          
-          const [client, server] = new WebSocketPair();
-          server.accept();
-          tunnel(server, socket, data);
-          
-          return new Response(null, { status: 101, webSocket: client });
-        } catch {
-          return new Response('Internal Server Error', { status: 500 });
-        }
+    // 热路径：WebSocket连接处理
+    if (request.headers.get('Upgrade') === 'websocket') {
+      const protocol = request.headers.get('sec-websocket-protocol');
+      
+      const protocolData = Uint8Array.from(atob(protocol.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+      const receivedUUID = protocolData.slice(1, 17);
+      
+      // 快速UUID验证
+      if (!receivedUUID.every((b, i) => b === config.uuidBytes[i])) {
+        return new Response('Invalid', { status: 403 });
       }
 
-      if (url.pathname === `/${config.userId}`) {
-        return new Response(html(config, host), {
-          headers: { 'Content-Type': 'text/html; charset=utf-8' }
-        });
-      }
-
-      if (url.pathname === `/${config.userId}/vless`) {
-        return new Response(genConfig(host, config), {
-          headers: { 'Content-Type': 'text/plain; charset=utf-8' }
-        });
-      }
-
-      return new Response('OK');
-    } catch {
-      return new Response('Internal Server Error', { status: 500 });
+      const { hostname, port, data } = fastParse(protocolData.buffer);
+      const socket = await fastConnect(hostname, port, config);
+      
+      const [client, server] = new WebSocketPair();
+      server.accept();
+      tunnel(server, socket, data);
+      
+      return new Response(null, { status: 101, webSocket: client });
     }
+
+    // 冷路径：页面和订阅
+    if (url.pathname === `/${config.userId}`) {
+      return new Response(html(config, host), {
+        headers: { 'Content-Type': 'text/html' }
+      });
+    }
+
+    if (url.pathname === `/${config.userId}/vless`) {
+      return new Response(genConfig(host, config), {
+        headers: { 'Content-Type': 'text/plain' }
+      });
+    }
+
+    return new Response('OK');
   }
 };
