@@ -13,19 +13,16 @@
 
    （也可将代码保存为名"_worker"的zip压缩包上传pages部署，优点有pages分配的域名很多地方可以直接访问，缺点就是每次修改变量要重新上传一次压缩包部署）
 
-### 2. 配置环境变量
+### 2. ⚙️ 环境变量配置
 
-在 Worker 设置页面，添加以下环境变量：
-
-| 变量名 | 说明 | 示例值 |
-|--------|------|--------|
-| `USER_ID` | 访问密钥 | `123456` |
-| `UUID` | VLESS UUID | `aaa6b096-1165-4bbe-935c-99f4ec902d02` |
-| `NODE_NAME` | 节点名称 | `CF-Worker` |
-| `PROXY_IPS` | 代理IP列表 | `www.visa.com` |
-| `FALLBACK_PROXY` | 备用代理 | `sjc.o00o.ooo:443` |
-| `ENABLE_FALLBACK` | 启用备用代理 | `true` |
-| `ENABLE_NAT64` | 启用NAT64 | `false` |
+| 变量名 | 说明 | 默认值 | 示例 |
+|--------|------|--------|------|
+| `USER_ID` | 用户ID（访问路径） | `123456` | `abc123` |
+| `UUID` | VLESS UUID | `aaa6b096-...` | 自定义UUID |
+| `BEST_IPS` | CF优选IP列表 | `developers.cloudflare.com` | 多行IP列表 |
+| `PROXY_IP` | 反代IP地址 | `sjc.o00o.ooo:443` | `proxy.com:443` |
+| `ENABLE_NAT64` | 启用NAT64转换 | `false` | `true` |
+| `NODE_NAME` | 节点名称 | `CF-vless` | `我的节点` |
 
 ### 3. 获取订阅链接
 
