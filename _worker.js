@@ -8,7 +8,7 @@ class Config {
     this.bestIPs = this.parseList(env?.BEST_IPS) || ['developers.cloudflare.com','ip.sb','www.visa.cn','ikun.glimmer.cf.090227.xyz'];
     this.proxyIP = url?.searchParams.get('proxyip') || env?.PROXY_IP || 'sjc.o00o.ooo:443';
     this.enableNAT64 = env?.ENABLE_NAT64 === 'true';
-    this.nodeName = env?.NODE_NAME || 'CF-vless';
+    this.nodeName = env?.NODE_NAME || 'IKUN-Vless';
     this.uuidBytes = new Uint8Array(this.uuid.replace(/-/g, '').match(/.{2}/g).map(x => parseInt(x, 16)));
   }
   
