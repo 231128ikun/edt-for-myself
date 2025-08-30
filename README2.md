@@ -29,9 +29,9 @@
 
 ```
 BEST_IPS=
+www.visa.cn
+ip.sb
 1.1.1.1
-8.8.8.8
-9.9.9.9
 ```
 
 ## 📖 使用方法
@@ -71,6 +71,23 @@ https://your-worker.workers.dev/123456?proxyip=new.proxy.com:443
 2. 确认域名解析正常
 3. 检查代理IP可用性
 
+### 自定义域名
 
+1. 在 Worker 页面点击 `Triggers`
+2. 添加自定义域名
+3. 在 DNS 设置中添加 CNAME 记录
 
-**注意**：本项目仅供学习和研究使用，请遵守当地法律法规。
+## 🔒 安全建议
+
+- ⚠️ 定期更换 UUID 和 USER_ID
+- 🔑 使用强密码作为 USER_ID
+- 📊 监控 Workers 分析面板
+- 🚫 不要公开分享你的配置信息
+
+**注意**: 请确保遵守 Cloudflare 服务条款，合理使用免费额度。
+
+## 🙏 致谢
+
+- [Cloudflare Workers](https://workers.cloudflare.com/) - 提供免费的边缘计算服务
+- [CMLiussss](https://github.com/cmliu/edgetunnel) - 参考大佬的代码
+- [kuangbao](https://github.com/Meibidi/kuangbao)- 以大佬的代码为模板ai修改出的本项目
