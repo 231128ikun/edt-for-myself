@@ -1,3 +1,4 @@
+//ai改的最初版，虽然使用没啥问题，但是经其他大佬所述，代码逻辑有点问题，还有一些没必要的操作
 import { connect } from 'cloudflare:sockets';
 
 // 配置管理类
