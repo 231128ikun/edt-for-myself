@@ -49,11 +49,20 @@
 
 ### 多IP配置示例
 
+逗号或换行分隔的最优 IP 地址列表：
+
 ```
 BEST_IPS=
 www.visa.cn
 ip.sb
 1.1.1.1:443
+```
+
+#### PROXY_IP
+格式为 `主机:端口` 的回退代理服务器：
+
+```bash
+PROXY_IP=proxy.example.com:443
 ```
 
 ## 📖 使用方法
