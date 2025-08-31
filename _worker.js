@@ -17,7 +17,7 @@ class Config {
     this.proxyIP = url?.searchParams.get('proxyip') || env?.PROXY_IP || 'sjc.o00o.ooo:443';
     this.enableNAT64 = env?.ENABLE_NAT64 === 'true';
     
-    // 预处理UUID为字节数组，避免重复计算
+    // 预处理UUID为字节数组
     this.uuidBytes = new Uint8Array(
       this.uuid.replace(/-/g, '').match(/.{2}/g).map(x => parseInt(x, 16))
     );
@@ -28,17 +28,12 @@ class Config {
   }
 }
 
-// ==================== 快速连接池 ====================
-const connectionCache = new Map();
-const DNS_CACHE_TIME = 300000; // 5分钟DNS缓存
-
+// ==================== 连接管理 ====================
 async function fastConnect(hostname, port, config) {
-  const key = `${hostname}:${port}`;
+  const attempts = [];
   
-  // 尝试直连
-  const attempts = [
-    () => connect({ hostname, port })
-  ];
+  // 直连尝试
+  attempts.push(() => connect({ hostname, port }));
   
   // NAT64（仅IPv4）
   if (config.enableNAT64 && /^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
@@ -74,62 +69,14 @@ async function fastConnect(hostname, port, config) {
   throw new Error('Connection failed');
 }
 
-// ==================== 高效数据传输 ====================
-async function streamTransfer(ws, socket, initialData) {
-  const writer = socket.writable.getWriter();
-  
-  // 立即响应成功
-  ws.send(new Uint8Array([0, 0]));
-  
-  // 写入初始数据
-  if (initialData?.length > 0) {
-    await writer.write(initialData);
-  }
-  
-  // 并行双向传输
-  const [wsToSocket, socketToWs] = await Promise.allSettled([
-    // WS -> Socket
-    (async () => {
-      const queue = [];
-      let processing = false;
-      
-      ws.addEventListener('message', async ({ data }) => {
-        queue.push(new Uint8Array(data));
-        if (!processing) {
-          processing = true;
-          while (queue.length > 0) {
-            const batch = queue.splice(0, 10); // 批处理
-            const merged = mergeUint8Arrays(batch);
-            try {
-              await writer.write(merged);
-            } catch {
-              break;
-            }
-          }
-          processing = false;
-        }
-      });
-    })(),
-    
-    // Socket -> WS  
-    socket.readable.pipeTo(new WritableStream({
-      write: chunk => ws.send(chunk),
-      abort: () => ws.close()
-    }))
-  ]);
-}
-
-// ==================== 快速协议解析 ====================
+// ==================== 协议处理 ====================
 function parseVlessHeader(buffer) {
   const view = new DataView(buffer.buffer);
-  
-  // 快速定位关键数据
   const uuid = buffer.slice(1, 17);
   const optLen = buffer[17];
   const portIdx = 18 + optLen + 1;
   const port = view.getUint16(portIdx);
   const addrType = buffer[portIdx + 2];
-  
   let addr, addrLen, addrIdx = portIdx + 3;
   
   switch (addrType) {
@@ -153,22 +100,63 @@ function parseVlessHeader(buffer) {
       throw new Error('Invalid address type');
   }
   
-  return {
-    uuid,
-    port,
-    address: addr,
-    addressType: addrType,
-    initialData: buffer.slice(addrIdx + addrLen)
-  };
+  return { uuid, port, address: addr, addressType: addrType, initialData: buffer.slice(addrIdx + addrLen) };
+}
+
+// ==================== 数据传输 ====================
+async function streamTransfer(ws, socket, initialData) {
+  const writer = socket.writable.getWriter();
+  
+  // 立即响应成功
+  ws.send(new Uint8Array([0, 0]));
+  
+  // 写入初始数据
+  if (initialData?.length > 0) {
+    await writer.write(initialData);
+  }
+  
+  // 并行双向传输
+  await Promise.allSettled([
+    // WS -> Socket
+    (async () => {
+      const queue = [];
+      let processing = false;
+      
+      ws.addEventListener('message', async ({ data }) => {
+        queue.push(new Uint8Array(data));
+        if (!processing) {
+          processing = true;
+          while (queue.length > 0) {
+            const batch = queue.splice(0, 10);
+            const merged = new Uint8Array(batch.reduce((acc, arr) => acc + arr.length, 0));
+            let offset = 0;
+            for (const arr of batch) {
+              merged.set(arr, offset);
+              offset += arr.length;
+            }
+            try {
+              await writer.write(merged);
+            } catch {
+              break;
+            }
+          }
+          processing = false;
+        }
+      });
+    })(),
+    
+    // Socket -> WS  
+    socket.readable.pipeTo(new WritableStream({
+      write: chunk => ws.send(chunk),
+      abort: () => ws.close()
+    }))
+  ]);
 }
 
 // ==================== WebSocket处理 ====================
 async function handleWebSocket(request, config) {
-  // 解析协议头
   const protocol = request.headers.get('sec-websocket-protocol');
-  if (!protocol) {
-    return new Response('Bad Request', { status: 400 });
-  }
+  if (!protocol) return new Response('Bad Request', { status: 400 });
   
   // Base64解码
   const protocolData = Uint8Array.from(
@@ -179,7 +167,7 @@ async function handleWebSocket(request, config) {
   // 解析VLESS协议
   const { uuid, port, address, addressType, initialData } = parseVlessHeader(protocolData);
   
-  // 快速UUID验证
+  // UUID验证
   if (!uuid.every((b, i) => b === config.uuidBytes[i])) {
     return new Response('Unauthorized', { status: 403 });
   }
@@ -206,64 +194,112 @@ async function handleWebSocket(request, config) {
 
 // ==================== 页面生成 ====================
 function generateHTML(config, host) {
+  const escapeHtml = (str) => str.replace(/[&<>"']/g, m => 
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+  
   return `<!DOCTYPE html>
 <html>
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>VLESS</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:system-ui;background:linear-gradient(135deg,#667eea,#764ba2);min-height:100vh;display:flex;justify-content:center;align-items:center;padding:20px}
-.c{background:rgba(255,255,255,.95);border-radius:20px;padding:30px;max-width:500px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.3)}
-h1{text-align:center;color:#333;margin-bottom:20px}
-.info{display:grid;gap:12px;margin-bottom:20px}
-.item{background:#f8f9fa;padding:12px;border-radius:8px}
-.label{font-size:12px;color:#666;margin-bottom:4px}
-.value{font-family:monospace;color:#333;word-break:break-all;font-size:14px}
-.box{background:#f8f9fa;border:2px solid #e9ecef;border-radius:8px;padding:12px;position:relative;margin-bottom:12px}
-.text{font-family:monospace;word-break:break-all;padding-right:70px;font-size:13px;line-height:1.5}
-.btn{position:absolute;right:8px;top:50%;transform:translateY(-50%);background:#667eea;color:white;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px}
-.btn:hover{background:#5a6fd8}
-.btn.ok{background:#28a745}
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>VLESS</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: system-ui; 
+      background: linear-gradient(135deg, #667eea, #764ba2); 
+      min-height: 100vh; 
+      display: flex; 
+      justify-content: center; 
+      align-items: center; 
+      padding: 20px; 
+    }
+    .container { 
+      background: rgba(255, 255, 255, 0.95); 
+      border-radius: 20px; 
+      padding: 30px; 
+      max-width: 500px; 
+      width: 100%; 
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); 
+    }
+    h1 { text-align: center; color: #333; margin-bottom: 20px; }
+    .info { display: grid; gap: 12px; margin-bottom: 20px; }
+    .item { background: #f8f9fa; padding: 12px; border-radius: 8px; }
+    .label { font-size: 12px; color: #666; margin-bottom: 4px; }
+    .value { font-family: monospace; color: #333; word-break: break-all; font-size: 14px; }
+    .box { 
+      background: #f8f9fa; 
+      border: 2px solid #e9ecef; 
+      border-radius: 8px; 
+      padding: 12px; 
+      position: relative; 
+      margin-bottom: 12px; 
+    }
+    .text { 
+      font-family: monospace; 
+      word-break: break-all; 
+      padding-right: 70px; 
+      font-size: 13px; 
+      line-height: 1.5; 
+    }
+    .btn { 
+      position: absolute; 
+      right: 8px; 
+      top: 50%; 
+      transform: translateY(-50%); 
+      background: #667eea; 
+      color: white; 
+      border: none; 
+      padding: 6px 12px; 
+      border-radius: 6px; 
+      cursor: pointer; 
+      font-size: 12px; 
+    }
+    .btn:hover { background: #5a6fd8; }
+    .btn.ok { background: #28a745; }
+  </style>
 </head>
 <body>
-<div class="c">
-<h1>🚀 VLESS</h1>
-<div class="info">
-<div class="item">
-<div class="label">节点名称</div>
-<div class="value">${config.nodeName}</div>
-</div>
-<div class="item">
-<div class="label">用户ID</div>
-<div class="value">${config.userId}</div>
-</div>
-<div class="item">
-<div class="label">代理IP</div>
-<div class="value">${config.proxyIP}</div>
-</div>
-</div>
-<h3>订阅链接</h3>
-<div class="box">
-<div class="text" id="s">https://${host}/${config.userId}/vless</div>
-<button class="btn" onclick="cp('s',this)">复制</button>
-</div>
-<h3>节点链接</h3>
-<div class="box">
-<div class="text" id="n">vless://${config.uuid}@${config.bestIPs[0]||host}:443?encryption=none&security=tls&type=ws&host=${host}&sni=${host}&path=%2F%3Fed%3D2560#${config.nodeName}</div>
-<button class="btn" onclick="cp('n',this)">复制</button>
-</div>
-</div>
-<script>
-function cp(id,btn){
-navigator.clipboard.writeText(document.getElementById(id).textContent).then(()=>{
-const o=btn.textContent;btn.textContent='✓';btn.classList.add('ok');
-setTimeout(()=>{btn.textContent=o;btn.classList.remove('ok')},1000)
-})
-}
-</script>
+  <div class="container">
+    <h1>🚀 VLESS</h1>
+    <div class="info">
+      <div class="item">
+        <div class="label">节点名称</div>
+        <div class="value">${escapeHtml(config.nodeName)}</div>
+      </div>
+      <div class="item">
+        <div class="label">用户ID</div>
+        <div class="value">${escapeHtml(config.userId)}</div>
+      </div>
+      <div class="item">
+        <div class="label">代理IP</div>
+        <div class="value">${escapeHtml(config.proxyIP)}</div>
+      </div>
+    </div>
+    <h3>订阅链接</h3>
+    <div class="box">
+      <div class="text" id="s">https://${escapeHtml(host)}/${escapeHtml(config.userId)}/vless</div>
+      <button class="btn" onclick="copyText('s', this)">复制</button>
+    </div>
+    <h3>节点链接</h3>
+    <div class="box">
+      <div class="text" id="n">vless://${escapeHtml(config.uuid)}@${escapeHtml(config.bestIPs[0] || host)}:443?encryption=none&security=tls&type=ws&host=${escapeHtml(host)}&sni=${escapeHtml(host)}&path=%2F%3Fed%3D2560#${escapeHtml(config.nodeName)}</div>
+      <button class="btn" onclick="copyText('n', this)">复制</button>
+    </div>
+  </div>
+  <script>
+    function copyText(id, btn) {
+      navigator.clipboard.writeText(document.getElementById(id).textContent).then(() => {
+        const originalText = btn.textContent;
+        btn.textContent = '✓';
+        btn.classList.add('ok');
+        setTimeout(() => {
+          btn.textContent = originalText;
+          btn.classList.remove('ok');
+        }, 1000);
+      });
+    }
+  </script>
 </body>
 </html>`;
 }
@@ -273,18 +309,6 @@ function generateVlessConfig(host, config) {
     const [addr, port = 443] = ip.split(':');
     return `vless://${config.uuid}@${addr}:${port}?encryption=none&security=tls&type=ws&host=${host}&sni=${host}&path=%2F%3Fed%3D2560#${config.nodeName}`;
   }).join('\n');
-}
-
-// ==================== 工具函数 ====================
-function mergeUint8Arrays(arrays) {
-  const totalLength = arrays.reduce((sum, arr) => sum + arr.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const arr of arrays) {
-    result.set(arr, offset);
-    offset += arr.length;
-  }
-  return result;
 }
 
 // ==================== 主入口 ====================
