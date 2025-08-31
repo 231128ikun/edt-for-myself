@@ -1,3 +1,4 @@
+//总觉得使用怪怪的，访问cf的网站的时候有时候显示不安全，但是总的来说能用
 import { connect } from 'cloudflare:sockets';
 
 // 环境变量配置
