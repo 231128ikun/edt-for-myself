@@ -44,7 +44,6 @@
 | `UUID` | VLESS UUID | `aaa6b096-...` | 自定义UUID |
 | `BEST_IPS` | CF优选IP列表 | `developers.cloudflare.com` | 多行IP列表 |
 | `PROXY_IP` | 反代IP地址 | `sjc.o00o.ooo:443` | `proxy.com:443` |
-| `ENABLE_NAT64` | 启用NAT64转换 | `false` | `true` |
 | `NODE_NAME` | 节点名称 | `CF-vless` | `我的节点` |
 
 ### 多IP配置示例
