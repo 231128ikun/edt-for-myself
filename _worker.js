@@ -21,9 +21,9 @@ class Config {
     this.uuidBytes = this._parseUUID(this.uuid);
     
     // 性能调优参数
-    this.connectionTimeout = parseInt(env?.CONNECTION_TIMEOUT) || 5000; // 连接超时(ms)
-    this.writeTimeout = parseInt(env?.WRITE_TIMEOUT) || 500; // 写入超时(ms) 
-    this.queueLimit = parseInt(env?.QUEUE_LIMIT) || 15; // 队列最大长度
+    this.connectionTimeout = parseInt(env?.CONNECTION_TIMEOUT) || 3000; // 连接超时(ms)
+    this.writeTimeout = parseInt(env?.WRITE_TIMEOUT) || 300; // 写入超时(ms) 
+    this.queueLimit = parseInt(env?.QUEUE_LIMIT) || 10; // 队列最大长度  
     this.bufferSize = parseInt(env?.BUFFER_SIZE) || 8192; // 缓冲区大小
     this.enableBatching = env?.ENABLE_BATCHING !== 'true'; // 是否启用批处理
     this.maxConcurrentWrites = parseInt(env?.MAX_CONCURRENT_WRITES) || 3; // 最大并发写入
@@ -94,7 +94,7 @@ function ipv4ToNat64(ip) {
   return `${hex.slice(0,4)}:${hex.slice(4)}`;
 }
 
-// ==================== 协议处理（进一步优化）====================
+// ==================== 协议处理 ====================
 // 预分配缓冲区池
 const bufferPool = [];
 const POOL_SIZE = 10;
