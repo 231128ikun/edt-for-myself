@@ -67,3 +67,26 @@ ENABLE_BATCHING - 改变处理逻辑
 QUEUE_LIMIT - 控制队列长度
 MAX_CONCURRENT_WRITES - 并发控制
 WRITE_TIMEOUT - 影响阻塞时间
+
+🎯 不同场景的最佳配置
+
+看视频流畅配置（稳定优先）：
+bashBUFFER_SIZE=8192          # 中等缓冲，平衡内存和速度
+ENABLE_BATCHING=true      # 启用批处理，减少中断
+QUEUE_LIMIT=10           # 适中队列，避免卡顿
+MAX_CONCURRENT_WRITES=2   # 低并发，稳定传输
+WRITE_TIMEOUT=150        # 较长超时，避免重传
+
+大文件下载配置（速度优先）：
+bashBUFFER_SIZE=16384        # 大缓冲区，提高吞吐
+ENABLE_BATCHING=true     # 批处理必须开启
+QUEUE_LIMIT=20          # 大队列，缓存更多数据
+MAX_CONCURRENT_WRITES=3  # 适度并发
+WRITE_TIMEOUT=200       # 长超时，减少重试
+
+低CPU使用配置（省资源）：
+bashBUFFER_SIZE=4096         # 小缓冲，省内存
+ENABLE_BATCHING=false    # 关闭批处理，直接传输
+QUEUE_LIMIT=5           # 小队列，减少处理
+MAX_CONCURRENT_WRITES=1  # 单线程，最低CPU
+WRITE_TIMEOUT=100       # 适中超时
