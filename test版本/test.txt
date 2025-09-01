@@ -15,18 +15,17 @@ class Config {
     ];
     
     this.proxyIP = url?.searchParams.get('proxyip') || env?.PROXY_IP || 'sjc.o00o.ooo:443';
-    this.enableNAT64 = env?.ENABLE_NAT64 === 'true';
     
     // 预处理UUID为字节数组 - 缓存解析结果
     this.uuidBytes = this._parseUUID(this.uuid);
     
     // 性能调优参数
-    this.connectionTimeout = parseInt(env?.CONNECTION_TIMEOUT) || 800; // 连接超时(ms)
-    this.writeTimeout = parseInt(env?.WRITE_TIMEOUT) || 200; // 写入超时(ms) 
-    this.queueLimit = parseInt(env?.QUEUE_LIMIT) || 20; // 队列最大长度
-    this.bufferSize = parseInt(env?.BUFFER_SIZE) || 16384; // 缓冲区大小
+    this.connectionTimeout = parseInt(env?.CONNECTION_TIMEOUT) || 3000; // 连接超时(ms)
+    this.writeTimeout = parseInt(env?.WRITE_TIMEOUT) || 500; // 写入超时(ms) 
+    this.queueLimit = parseInt(env?.QUEUE_LIMIT) || 10; // 队列最大长度
+    this.bufferSize = parseInt(env?.BUFFER_SIZE) || 6144; // 缓冲区大小
     this.enableBatching = env?.ENABLE_BATCHING !== 'true'; // 是否启用批处理
-    this.maxConcurrentWrites = parseInt(env?.MAX_CONCURRENT_WRITES) || 3; // 最大并发写入
+    this.maxConcurrentWrites = parseInt(env?.MAX_CONCURRENT_WRITES) || 2; // 最大并发写入
   }
   
   _parseUUID(uuid) {
@@ -50,15 +49,6 @@ async function fastConnect(hostname, port, config) {
   // 直连尝试
   attempts.push(() => connect({ hostname, port }));
   
-  // NAT64（仅IPv4）- 优化正则表达式
-  if (config.enableNAT64 && isIPv4(hostname)) {
-    const nat64Host = ipv4ToNat64(hostname);
-    attempts.push(() => connect({ 
-      hostname: `[2001:67c:2960:6464::${nat64Host}]`, 
-      port 
-    }));
-  }
-  
   // 反代
   if (config.proxyIP) {
     const [proxyHost, proxyPort = port] = config.proxyIP.split(':');
@@ -80,18 +70,6 @@ async function fastConnect(hostname, port, config) {
   }
   
   throw new Error('Connection failed');
-}
-
-// 辅助函数：快速IPv4检测
-function isIPv4(hostname) {
-  return /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname);
-}
-
-// 辅助函数：IPv4转NAT64
-function ipv4ToNat64(ip) {
-  const parts = ip.split('.');
-  const hex = parts.map(n => (+n).toString(16).padStart(2, '0')).join('');
-  return `${hex.slice(0,4)}:${hex.slice(4)}`;
 }
 
 // ==================== 协议处理（进一步优化）====================
