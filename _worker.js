@@ -21,11 +21,11 @@ class Config {
     this.uuidBytes = this._parseUUID(this.uuid);
     
     // 性能调优参数
-    this.connectionTimeout = parseInt(env?.CONNECTION_TIMEOUT) || 800; // 连接超时(ms)
-    this.writeTimeout = parseInt(env?.WRITE_TIMEOUT) || 100; // 写入超时(ms) 
+    this.connectionTimeout = parseInt(env?.CONNECTION_TIMEOUT) || 500; // 连接超时(ms)
+    this.writeTimeout = parseInt(env?.WRITE_TIMEOUT) || 50; // 写入超时(ms) 
     this.queueLimit = parseInt(env?.QUEUE_LIMIT) || 10; // 队列最大长度
-    this.bufferSize = parseInt(env?.BUFFER_SIZE) || 8192; // 缓冲区大小
-    this.enableBatching = env?.ENABLE_BATCHING !== 'true'; // 是否启用批处理
+    this.bufferSize = parseInt(env?.BUFFER_SIZE) || 4096; // 缓冲区大小
+    this.enableBatching = env?.ENABLE_BATCHING !== 'false'; // 是否启用批处理
     this.maxConcurrentWrites = parseInt(env?.MAX_CONCURRENT_WRITES) || 2; // 最大并发写入
   }
   
