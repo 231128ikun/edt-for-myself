@@ -1,0 +1,69 @@
+关键性能调优参数
+我添加了这些环境变量供你测试：
+1. CONNECTION_TIMEOUT (默认1000ms)
+
+影响：连接建立超时时间
+建议测试值：500, 1000, 2000
+过小会导致连接失败，过大会增加CPU等待时间
+
+2. WRITE_TIMEOUT (默认100ms)
+
+影响：单次写入操作超时
+建议测试值：50, 100, 200
+关键参数，直接影响数据传输速度
+
+3. QUEUE_LIMIT (默认10)
+
+影响：内存队列最大长度
+建议测试值：5, 10, 20
+过大占用内存，过小可能丢数据
+
+4. BUFFER_SIZE (默认8192)
+
+影响：缓冲区大小，直接影响内存使用和CPU
+建议测试值：4096, 8192, 16384
+最重要的性能参数之一
+
+5. ENABLE_BATCHING (默认true)
+
+影响：是否启用批处理模式
+测试值：true（高吞吐）, false（低延迟）
+关键性能开关
+
+6. MAX_CONCURRENT_WRITES (默认3)
+
+影响：最大并发写入数量
+建议测试值：1, 3, 5
+影响CPU并发负载
+
+性能测试建议
+推荐测试组合：
+
+低延迟配置：
+bashENABLE_BATCHING=false
+WRITE_TIMEOUT=50
+CONNECTION_TIMEOUT=1000
+BUFFER_SIZE=4096
+
+高吞吐配置：
+bashENABLE_BATCHING=true  
+WRITE_TIMEOUT=200
+QUEUE_LIMIT=20
+BUFFER_SIZE=16384
+MAX_CONCURRENT_WRITES=5
+
+保守配置（推荐起点）：
+bashCONNECTION_TIMEOUT=1000
+WRITE_TIMEOUT=100
+QUEUE_LIMIT=5
+BUFFER_SIZE=8192
+ENABLE_BATCHING=true
+MAX_CONCURRENT_WRITES=1
+
+最影响CPU性能的参数排序：
+
+BUFFER_SIZE - 直接影响内存分配
+ENABLE_BATCHING - 改变处理逻辑
+QUEUE_LIMIT - 控制队列长度
+MAX_CONCURRENT_WRITES - 并发控制
+WRITE_TIMEOUT - 影响阻塞时间
