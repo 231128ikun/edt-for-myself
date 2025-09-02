@@ -1,92 +1,266 @@
-关键性能调优参数
-我添加了这些环境变量供你测试：
-1. CONNECTION_TIMEOUT (默认1000ms)
+参数说明（逐项 — 包含类型、默认值、是否必需、用途与示例）
 
-影响：连接建立超时时间
-建议测试值：500, 1000, 2000
-过小会导致连接失败，过大会增加CPU等待时间
+我把参数按“核心”“连接/传输”“安全/白名单”“并发/超时/缓冲”“Durable Object 全局”几类列出。
 
-2. WRITE_TIMEOUT (默认100ms)
+A. 核心身份与展示（必需）
 
-影响：单次写入操作超时
-建议测试值：50, 100, 200
-关键参数，直接影响数据传输速度
+USER_ID
 
-3. QUEUE_LIMIT (默认10)
+类型：字符串
 
-影响：内存队列最大长度
-建议测试值：5, 10, 20
-过大占用内存，过小可能丢数据
+默认：'123456'
 
-4. BUFFER_SIZE (默认8192)
+必需：否，但建议设置（用于页面/订阅路径）
 
-影响：缓冲区大小，直接影响内存使用和CPU
-建议测试值：4096, 8192, 16384
-最重要的性能参数之一
+用途：生成页面地址 https://<host>/<USER_ID> 与订阅路径 /<USER_ID>/vless。
 
-5. ENABLE_BATCHING (默认true)
+示例：USER_ID=10001
 
-影响：是否启用批处理模式
-测试值：true（高吞吐）, false（低延迟）
-关键性能开关
+UUID
 
-6. MAX_CONCURRENT_WRITES (默认3)
+类型：字符串（标准 UUID）
 
-影响：最大并发写入数量
-建议测试值：1, 3, 5
-影响CPU并发负载
+默认：'aaa6b096-1165-4bbe-935c-99f4ec902d02'
 
-性能测试建议
-推荐测试组合：
+必需：是（用于授权客户端）
 
-低延迟配置：
-bashENABLE_BATCHING=false
-WRITE_TIMEOUT=50
-CONNECTION_TIMEOUT=1000
-BUFFER_SIZE=4096
+用途：客户端在 VLESS 协议头中提供该 UUID；Worker 用它做验证。
 
-高吞吐配置：
-bashENABLE_BATCHING=true  
-WRITE_TIMEOUT=200
-QUEUE_LIMIT=20
-BUFFER_SIZE=16384
-MAX_CONCURRENT_WRITES=5
+示例：UUID=0f8fad5b-d9cb-469f-a165-70867728950e
 
-保守配置（推荐起点）：
-bashCONNECTION_TIMEOUT=1000
-WRITE_TIMEOUT=100
-QUEUE_LIMIT=5
-BUFFER_SIZE=8192
-ENABLE_BATCHING=true
-MAX_CONCURRENT_WRITES=1
+NODE_NAME
 
-最影响CPU性能的参数排序：
+类型：字符串
 
-BUFFER_SIZE - 直接影响内存分配
-ENABLE_BATCHING - 改变处理逻辑
-QUEUE_LIMIT - 控制队列长度
-MAX_CONCURRENT_WRITES - 并发控制
-WRITE_TIMEOUT - 影响阻塞时间
+默认：'IKUN-Vless'
 
-🎯 不同场景的最佳配置
+必需：否（仅用于页面显示与节点链接）
 
-看视频流畅配置（稳定优先）：
-bashBUFFER_SIZE=8192          # 中等缓冲，平衡内存和速度
-ENABLE_BATCHING=true      # 启用批处理，减少中断
-QUEUE_LIMIT=10           # 适中队列，避免卡顿
-MAX_CONCURRENT_WRITES=2   # 低并发，稳定传输
-WRITE_TIMEOUT=150        # 较长超时，避免重传
+用途：显示在生成的 HTML 页面和节点链接的注释（# 后面）。
 
-大文件下载配置（速度优先）：
-bashBUFFER_SIZE=16384        # 大缓冲区，提高吞吐
-ENABLE_BATCHING=true     # 批处理必须开启
-QUEUE_LIMIT=20          # 大队列，缓存更多数据
-MAX_CONCURRENT_WRITES=3  # 适度并发
-WRITE_TIMEOUT=200       # 长超时，减少重试
+示例：NODE_NAME=MyVlessNode
 
-低CPU使用配置（省资源）：
-bashBUFFER_SIZE=4096         # 小缓冲，省内存
-ENABLE_BATCHING=false    # 关闭批处理，直接传输
-QUEUE_LIMIT=5           # 小队列，减少处理
-MAX_CONCURRENT_WRITES=1  # 单线程，最低CPU
-WRITE_TIMEOUT=100       # 适中超时
+B. 连接 / 代理 / NAT64（可选）
+
+BEST_IPS
+
+类型：换行或逗号分隔字符串列表
+
+默认：内置数组（developers.cloudflare.com, ip.sb, ...）
+
+必需：否
+
+用途：生成节点链接用作备用地址列表。
+
+示例：BEST_IPS=1.2.3.4,example.com
+
+PROXY_IP
+
+类型：host:port 字符串
+
+默认：空（表示不使用）
+
+必需：否
+
+用途：在直连失败时用作备用连接（反代）。
+
+示例：PROXY_IP=sjc.o00o.ooo:443
+
+ENABLE_NAT64
+
+类型："true" / "false"
+
+默认："false"
+
+必需：否
+
+用途：如果启用并目标是 IPv4，则尝试转换成 NAT64 IPv6 地址并连接（用于 IPv6-only 环境）。
+
+示例：ENABLE_NAT64=true
+
+ENABLE_BATCHING
+
+类型："true" / "false"
+
+默认："false"（默认使用直接写入，低延迟）
+
+必需：否
+
+用途：切换为“批处理写入”模式以提高吞吐量（会在内存与延迟上有所取舍）。
+
+示例：ENABLE_BATCHING=true
+
+C. 安全 / 访问控制（可选但强烈建议）
+
+ALLOW_HOSTS
+
+类型：换行或逗号分隔字符串列表（域名或 IP）
+
+默认：未设置（表示允许公网主机，但会排除私网/回环地址）
+
+必需：否（但建议在生产中使用白名单）
+
+用途：如果设置，只允许这些 host 或其子域访问（例如 example.com 允许 a.example.com）。
+
+示例：ALLOW_HOSTS=example.com,api.example.org
+
+ALLOW_PORTS
+
+类型：逗号或换行分隔的端口数字列表
+
+默认：未设置（表示允许所有端口，除被 DENY 列表）
+
+必需：否
+
+用途：当你只想允许一小部分端口（例如 80,443）时设置。
+
+示例：ALLOW_PORTS=80,443
+
+DENY_PORTS
+
+类型：逗号或换行分隔的端口数字列表
+
+默认：25,110,143,465,587（阻止常见邮件端口）
+
+必需：否（推荐保持默认阻止邮件端口）
+
+用途：明确阻止某些端口以避免被滥用（如 SMTP）。
+
+示例：DENY_PORTS=25,110,143,465,587
+
+D. 并发 / 超时 / 缓冲（性能调优）
+
+CONNECTION_TIMEOUT
+
+类型：整数（毫秒）
+
+默认：3000
+
+用途：connect() 的超时时间（尝试连接目标的超时）。
+
+示例：CONNECTION_TIMEOUT=3000
+
+WRITE_TIMEOUT
+
+类型：整数（毫秒）
+
+默认：500
+
+用途：写入 socket 的最大允许时间（避免写卡住造成资源占用）。
+
+示例：WRITE_TIMEOUT=500
+
+QUEUE_LIMIT
+
+类型：整数（条数）
+
+默认：25
+
+用途：批处理写入时的队列上限，超过则丢弃最旧数据以防 OOM。
+
+示例：QUEUE_LIMIT=25
+
+BUFFER_SIZE
+
+类型：整数（字节）
+
+默认：169384
+
+用途：合并写入时的合并缓冲区上限大小。
+
+示例：BUFFER_SIZE=65536
+
+MAX_CONCURRENT_WRITES
+
+类型：整数
+
+默认：4
+
+用途：批处理时并发写入的限制（减少并发写带来的资源冲击）。
+
+示例：MAX_CONCURRENT_WRITES=4
+
+POOL_SIZE
+
+类型：整数
+
+默认：10
+
+用途：内存缓冲池大小（可降低内存分配开销）。
+
+示例：POOL_SIZE=10
+
+CONNECT_ATTEMPT_PARALLEL
+
+类型：整数
+
+默认：2
+
+用途：每个请求内允许的并发外连尝试数（限制并行 connect() 调用数量以降低峰值并发）。
+
+示例：CONNECT_ATTEMPT_PARALLEL=2
+
+E. Durable Object（全局并发控制，可选）
+
+ENABLE_GLOBAL_LIMITER
+
+类型："true" / "false"
+
+默认："false"
+
+用途：是否启用 Durable Object 全局并发限制（若启用，务必在 wrangler 中绑定 ConnectionLimiter）。
+
+示例：ENABLE_GLOBAL_LIMITER=true
+
+GLOBAL_ACQUIRE_RETRIES
+
+类型：整数
+
+默认：3
+
+用途：尝试从 DO 获取全局配额的重试次数（指数退避）。
+
+示例：GLOBAL_ACQUIRE_RETRIES=3
+
+GLOBAL_ACQUIRE_BACKOFF_MS
+
+类型：整数（毫秒）
+
+默认：100
+
+用途：DO 获取失败后的基础退避时间（会按 2^i 放大）。
+
+示例：GLOBAL_ACQUIRE_BACKOFF_MS=100
+
+MAX_GLOBAL_CONN（在 DO 环境变量里）
+
+类型：整数
+
+默认：100（DO 层默认）
+
+用途：Durable Object 中设置的全站并发上限（由 DO 的 env.MAX_GLOBAL_CONN 决定）。
+
+示例：MAX_GLOBAL_CONN=200（在 wrangler 中为 DO 的 env）
+
+推荐部署示例（wrangler.toml 片段）
+
+如果使用 Durable Object，请在 wrangler.toml 中绑定 DO（示例）：
+
+name = "vless-worker"
+main = "./index.js"
+compatibility_date = "2025-09-02"
+
+[vars]
+USER_ID = "10001"
+UUID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+NODE_NAME = "MyVlessNode"
+ENABLE_GLOBAL_LIMITER = "true"
+ENABLE_BATCHING = "false"
+CONNECT_ATTEMPT_PARALLEL = "2"
+MAX_CONCURRENT_WRITES = "4"
+# ALLOW_HOSTS = "example.com"
+
+# Durable Object binding
+[[durable_objects]]
+name = "ConnectionLimiter"
+class_name = "ConnectionLimiter"
