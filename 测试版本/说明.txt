@@ -1,266 +1,186 @@
-参数说明（逐项 — 包含类型、默认值、是否必需、用途与示例）
-
-我把参数按“核心”“连接/传输”“安全/白名单”“并发/超时/缓冲”“Durable Object 全局”几类列出。
-
-A. 核心身份与展示（必需）
-
-USER_ID
-
-类型：字符串
-
-默认：'123456'
-
-必需：否，但建议设置（用于页面/订阅路径）
-
-用途：生成页面地址 https://<host>/<USER_ID> 与订阅路径 /<USER_ID>/vless。
-
-示例：USER_ID=10001
-
-UUID
-
-类型：字符串（标准 UUID）
-
-默认：'aaa6b096-1165-4bbe-935c-99f4ec902d02'
-
-必需：是（用于授权客户端）
-
-用途：客户端在 VLESS 协议头中提供该 UUID；Worker 用它做验证。
-
-示例：UUID=0f8fad5b-d9cb-469f-a165-70867728950e
-
-NODE_NAME
-
-类型：字符串
-
-默认：'IKUN-Vless'
-
-必需：否（仅用于页面显示与节点链接）
-
-用途：显示在生成的 HTML 页面和节点链接的注释（# 后面）。
-
-示例：NODE_NAME=MyVlessNode
-
-B. 连接 / 代理 / NAT64（可选）
-
-BEST_IPS
-
-类型：换行或逗号分隔字符串列表
-
-默认：内置数组（developers.cloudflare.com, ip.sb, ...）
-
-必需：否
-
-用途：生成节点链接用作备用地址列表。
-
-示例：BEST_IPS=1.2.3.4,example.com
-
-PROXY_IP
-
-类型：host:port 字符串
-
-默认：空（表示不使用）
-
-必需：否
-
-用途：在直连失败时用作备用连接（反代）。
-
-示例：PROXY_IP=sjc.o00o.ooo:443
-
-ENABLE_NAT64
-
-类型："true" / "false"
-
-默认："false"
-
-必需：否
-
-用途：如果启用并目标是 IPv4，则尝试转换成 NAT64 IPv6 地址并连接（用于 IPv6-only 环境）。
-
-示例：ENABLE_NAT64=true
-
-ENABLE_BATCHING
-
-类型："true" / "false"
-
-默认："false"（默认使用直接写入，低延迟）
-
-必需：否
-
-用途：切换为“批处理写入”模式以提高吞吐量（会在内存与延迟上有所取舍）。
-
-示例：ENABLE_BATCHING=true
-
-C. 安全 / 访问控制（可选但强烈建议）
-
-ALLOW_HOSTS
-
-类型：换行或逗号分隔字符串列表（域名或 IP）
-
-默认：未设置（表示允许公网主机，但会排除私网/回环地址）
-
-必需：否（但建议在生产中使用白名单）
-
-用途：如果设置，只允许这些 host 或其子域访问（例如 example.com 允许 a.example.com）。
-
-示例：ALLOW_HOSTS=example.com,api.example.org
-
-ALLOW_PORTS
-
-类型：逗号或换行分隔的端口数字列表
-
-默认：未设置（表示允许所有端口，除被 DENY 列表）
-
-必需：否
-
-用途：当你只想允许一小部分端口（例如 80,443）时设置。
-
-示例：ALLOW_PORTS=80,443
-
-DENY_PORTS
-
-类型：逗号或换行分隔的端口数字列表
-
-默认：25,110,143,465,587（阻止常见邮件端口）
-
-必需：否（推荐保持默认阻止邮件端口）
-
-用途：明确阻止某些端口以避免被滥用（如 SMTP）。
-
-示例：DENY_PORTS=25,110,143,465,587
-
-D. 并发 / 超时 / 缓冲（性能调优）
-
-CONNECTION_TIMEOUT
-
-类型：整数（毫秒）
-
-默认：3000
-
-用途：connect() 的超时时间（尝试连接目标的超时）。
-
-示例：CONNECTION_TIMEOUT=3000
-
-WRITE_TIMEOUT
-
-类型：整数（毫秒）
-
-默认：500
-
-用途：写入 socket 的最大允许时间（避免写卡住造成资源占用）。
-
-示例：WRITE_TIMEOUT=500
-
-QUEUE_LIMIT
-
-类型：整数（条数）
-
-默认：25
-
-用途：批处理写入时的队列上限，超过则丢弃最旧数据以防 OOM。
-
-示例：QUEUE_LIMIT=25
-
-BUFFER_SIZE
-
-类型：整数（字节）
-
-默认：169384
-
-用途：合并写入时的合并缓冲区上限大小。
-
-示例：BUFFER_SIZE=65536
-
-MAX_CONCURRENT_WRITES
-
-类型：整数
-
-默认：4
-
-用途：批处理时并发写入的限制（减少并发写带来的资源冲击）。
-
-示例：MAX_CONCURRENT_WRITES=4
-
-POOL_SIZE
-
-类型：整数
-
-默认：10
-
-用途：内存缓冲池大小（可降低内存分配开销）。
-
-示例：POOL_SIZE=10
-
-CONNECT_ATTEMPT_PARALLEL
-
-类型：整数
-
-默认：2
-
-用途：每个请求内允许的并发外连尝试数（限制并行 connect() 调用数量以降低峰值并发）。
-
-示例：CONNECT_ATTEMPT_PARALLEL=2
-
-E. Durable Object（全局并发控制，可选）
-
-ENABLE_GLOBAL_LIMITER
-
-类型："true" / "false"
-
-默认："false"
-
-用途：是否启用 Durable Object 全局并发限制（若启用，务必在 wrangler 中绑定 ConnectionLimiter）。
-
-示例：ENABLE_GLOBAL_LIMITER=true
-
-GLOBAL_ACQUIRE_RETRIES
-
-类型：整数
-
-默认：3
-
-用途：尝试从 DO 获取全局配额的重试次数（指数退避）。
-
-示例：GLOBAL_ACQUIRE_RETRIES=3
-
-GLOBAL_ACQUIRE_BACKOFF_MS
-
-类型：整数（毫秒）
-
-默认：100
-
-用途：DO 获取失败后的基础退避时间（会按 2^i 放大）。
-
-示例：GLOBAL_ACQUIRE_BACKOFF_MS=100
-
-MAX_GLOBAL_CONN（在 DO 环境变量里）
-
-类型：整数
-
-默认：100（DO 层默认）
-
-用途：Durable Object 中设置的全站并发上限（由 DO 的 env.MAX_GLOBAL_CONN 决定）。
-
-示例：MAX_GLOBAL_CONN=200（在 wrangler 中为 DO 的 env）
-
-推荐部署示例（wrangler.toml 片段）
-
-如果使用 Durable Object，请在 wrangler.toml 中绑定 DO（示例）：
-
-name = "vless-worker"
-main = "./index.js"
-compatibility_date = "2025-09-02"
-
-[vars]
-USER_ID = "10001"
-UUID = "0f8fad5b-d9cb-469f-a165-70867728950e"
-NODE_NAME = "MyVlessNode"
-ENABLE_GLOBAL_LIMITER = "true"
-ENABLE_BATCHING = "false"
-CONNECT_ATTEMPT_PARALLEL = "2"
-MAX_CONCURRENT_WRITES = "4"
-# ALLOW_HOSTS = "example.com"
-
-# Durable Object binding
-[[durable_objects]]
-name = "ConnectionLimiter"
-class_name = "ConnectionLimiter"
+# VLESS Worker 参数配置指南
+
+## 🔧 核心必需参数
+
+### `USER_ID`
+- **作用**: 用户访问路径标识符
+- **默认值**: `123456`
+- **使用建议**: 
+  - 设置为随机字符串增加安全性
+  - 例如: `user_abc123`, `my-proxy-2024`
+  - 访问路径将是: `https://your-worker.domain.com/{USER_ID}`
+
+### `UUID`
+- **作用**: VLESS协议客户端验证标识
+- **默认值**: `aaa6b096-1165-4bbe-935c-99f4ec902d02`
+- **使用建议**:
+  - **必须更改默认值**，使用在线UUID生成器
+  - 格式: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
+  - 这是最重要的安全参数，泄露后需要立即更换
+
+### `NODE_NAME`
+- **作用**: 客户端显示的节点名称
+- **默认值**: `IKUN-Vless`
+- **使用建议**:
+  - 设置有意义的名称，如: `US-West-01`, `HK-Premium`
+  - 支持中文: `香港节点`, `美国西部`
+
+### `BEST_IPS`
+- **作用**: 生成多个节点配置时使用的IP列表
+- **默认值**: `developers.cloudflare.com,ip.sb,www.visa.cn`
+- **使用建议**:
+  - 用逗号分隔多个IP/域名
+  - 选择延迟低、稳定的Cloudflare CDN IP
+  - 可以包含端口: `1.2.3.4:8443,5.6.7.8:2053`
+
+## 🌐 连接优化参数
+
+### `PROXY_IP` 
+- **作用**: 备用代理服务器地址
+- **默认值**: 无
+- **使用建议**:
+  - 格式: `host:port` 或 `host`（使用目标端口）
+  - 当直连失败时自动切换到此代理
+  - 示例: `proxy.example.com:8080`
+  - 用户也可在URL中动态指定: `?proxyip=1.2.3.4:443`
+
+### `DIRECT_TIMEOUT`
+- **作用**: 直连尝试的超时时间（毫秒）
+- **默认值**: `800`
+- **使用建议**:
+  - 设置较短时间以快速失败切换
+  - 网络条件好: `600-800ms`
+  - 网络条件差: `1000-1500ms`
+
+### `PROXY_TIMEOUT`
+- **作用**: 代理连接的超时时间（毫秒）
+- **默认值**: `1500`
+- **使用建议**:
+  - 比直连稍长，给代理更多时间
+  - 通常设置为直连的1.5-2倍
+  - 范围: `1200-3000ms`
+
+### `NAT64_TIMEOUT`
+- **作用**: NAT64兜底连接的超时时间（毫秒）
+- **默认值**: `3000`
+- **使用建议**:
+  - 最长超时，作为最后的尝试
+  - 范围: `2000-5000ms`
+  - 仅对IPv4目标地址生效
+
+### `WRITE_TIMEOUT`
+- **作用**: 数据写入操作的超时时间（毫秒）
+- **默认值**: `5000`
+- **使用建议**:
+  - 防止写入阻塞导致连接卡死
+  - 通常不需要调整
+  - 网络不稳定环境可适当增加
+
+## 🔒 安全控制参数
+
+### `ALLOW_PORTS`
+- **作用**: 允许访问的端口白名单
+- **默认值**: 无（允许所有端口）
+- **使用建议**:
+  - 用逗号分隔: `80,443,8080,8443`
+  - 如果设置了白名单，只能访问列表中的端口
+  - 生产环境建议设置: `80,443,8080,8443,2053,2083,2087,2096`
+
+### `DENY_PORTS`
+- **作用**: 禁止访问的端口黑名单
+- **默认值**: `25,110,143,465,587`（邮件端口）
+- **使用建议**:
+  - 默认已禁用常见邮件端口，防止滥用
+  - 可添加其他敏感端口: `22,23,135,139,445`
+  - 用逗号分隔多个端口
+
+### `ALLOW_HOSTS`
+- **作用**: 允许访问的主机白名单
+- **默认值**: 无（允许所有主机）
+- **使用建议**:
+  - 格式: `example.com,sub.domain.com`
+  - 支持子域名匹配: 设置`google.com`会允许`*.google.com`
+  - 严格控制场景下使用，一般不建议设置
+
+## 🚦 可选全局限流参数
+
+### `MAX_GLOBAL_CONNECTIONS`
+- **作用**: 全局并发连接数限制（需要Durable Object）
+- **默认值**: `100`
+- **使用建议**:
+  - 防止资源过度消耗
+  - 个人使用: `10-50`
+  - 小团队: `50-200`
+  - 需要在`wrangler.toml`中配置Durable Object
+
+## 📝 完整配置示例
+
+### 基础个人使用
+```bash
+USER_ID=my_proxy_2024
+UUID=12345678-1234-1234-1234-123456789abc
+NODE_NAME=我的节点
+BEST_IPS=162.159.192.1,162.159.193.1
+DIRECT_TIMEOUT=800
+PROXY_TIMEOUT=1500
+```
+
+### 生产环境配置
+```bash
+USER_ID=prod_vless_service
+UUID=87654321-4321-4321-4321-cba987654321
+NODE_NAME=Production-HK-01
+BEST_IPS=1.1.1.1,1.0.0.1,8.8.8.8
+PROXY_IP=backup.proxy.com:443
+DIRECT_TIMEOUT=600
+PROXY_TIMEOUT=1200
+NAT64_TIMEOUT=3000
+WRITE_TIMEOUT=5000
+ALLOW_PORTS=80,443,8080,8443,2053,2083,2087,2096
+DENY_PORTS=22,23,25,110,135,139,143,445,465,587
+MAX_GLOBAL_CONNECTIONS=200
+```
+
+### 严格控制环境
+```bash
+USER_ID=restricted_access
+UUID=your-unique-uuid-here
+NODE_NAME=Restricted-Node
+ALLOW_HOSTS=github.com,stackoverflow.com,npmjs.com
+ALLOW_PORTS=80,443
+DIRECT_TIMEOUT=1000
+PROXY_TIMEOUT=2000
+```
+
+## ⚡ 性能调优建议
+
+### 连接超时优化
+- **低延迟网络**: 直连600ms，代理1000ms
+- **高延迟网络**: 直连1200ms，代理2500ms
+- **移动网络**: 直连1000ms，代理2000ms
+
+### 安全性建议
+1. **必须更改UUID** - 使用随机生成的UUID
+2. **隐藏USER_ID** - 不要使用容易猜测的值
+3. **端口控制** - 根据实际需求设置端口白名单
+4. **定期更换** - 定期更换UUID和USER_ID
+
+### 故障排除
+- 如果连接经常失败，增加超时时间
+- 如果直连慢，配置合适的PROXY_IP
+- 如果访问特定网站有问题，检查ALLOW_HOSTS设置
+- 查看Worker日志了解连接失败原因
+
+## 🔄 连接策略流程
+
+```
+1. 直连目标 (DIRECT_TIMEOUT)
+   ↓ 失败
+2. 代理连接 (PROXY_TIMEOUT) [如果配置了PROXY_IP]
+   ↓ 失败  
+3. NAT64兜底 (NAT64_TIMEOUT) [仅IPv4目标]
+   ↓ 失败
+4. 返回连接失败错误
+```
+
+这个流程确保了最优的连接体验：优先使用最快的直连，不通就快速切换到备用方案。
