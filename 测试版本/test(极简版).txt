@@ -1,0 +1,37 @@
+import { connect } from 'cloudflare:sockets';
+
+const U='123456',I='aaa6b096-1165-4bbe-935c-99f4ec902d02',P='sjc.o00o.ooo:443',N='IKUN-Vless',
+B=['developers.cloudflare.com','ip.sb','www.visa.cn','ikun.glimmer.cf.090227.xyz'],
+IB=new Uint8Array(I.replace(/-/g,'').match(/.{2}/g).map(x=>parseInt(x,16)));
+
+const b64u=s=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
+const parse=d=>{
+  d=new Uint8Array(d);const o=18+d[17]+1,pt=(d[o]<<8)|d[o+1];let p=o+3,t=d[o+2],h;
+  if(t===1)h=`${d[p++]}.${d[p++]}.${d[p++]}.${d[p++]}`;
+  else if(t===2){const l=d[p++];h=new TextDecoder().decode(d.subarray(p,p+l));p+=l;}
+  else{h=Array.from({length:8},(_,i)=>((d[p+2*i]<<8)|d[p+2*i+1]).toString(16)).join(':');p+=16;}
+  return{h,pt,data:d.slice(p)};
+};
+const conn=async(h,pt)=>{try{const s=await connect({hostname:h,port:pt});await s.opened;return s;}
+catch{const [ph,pp]=P.split(':');const s=await connect({hostname:ph,port:+pp||pt});await s.opened;return s;}};
+
+export default{
+ async fetch(r){
+  const host=r.headers.get('Host'),u=new URL(r.url);
+  if(r.headers.get('Upgrade')==='websocket'){
+   const pd=b64u(r.headers.get('sec-websocket-protocol')||'');if(!pd.slice(1,17).every((b,i)=>b===IB[i]))return new Response('',{status:403});
+   const{h,pt,data}=parse(pd.buffer),s=await conn(h,pt),[c,sv]=new WebSocketPair();sv.accept();
+   const w=s.writable.getWriter();sv.send(new Uint8Array([0,0]));data&&w.write(data);
+   sv.addEventListener('message',e=>w.write(new Uint8Array(e.data)));
+   s.readable.pipeTo(new WritableStream({write:chunk=>sv.send(chunk)}));
+   return new Response(null,{status:101,webSocket:c});
+  }
+  if(u.pathname===`/${U}/vless`){
+   return new Response([...B,`${host}:443`].map(ip=>{
+    const[a,pt=443]=ip.split(':');
+    return `vless://${I}@${a}:${pt}?encryption=none&security=tls&type=ws&host=${host}&sni=${host}&path=%2F%3Fed%3D2560#${N}`;
+   }).join('\n'));
+  }
+  return new Response('');
+ }
+}
