@@ -20,8 +20,8 @@ class Config {
     this.allowHosts = this.parseList(env?.ALLOW_HOSTS);
 
     // 超时参数 - 关键性能参数
-    this.directTimeout = parseInt(env?.DIRECT_TIMEOUT) || 500; // 直连快速失败
-    this.proxyTimeout = parseInt(env?.PROXY_TIMEOUT) || 1500; // 代理连接超时
+    this.directTimeout = parseInt(env?.DIRECT_TIMEOUT) || 1500; // 直连快速失败  
+    this.proxyTimeout = parseInt(env?.PROXY_TIMEOUT) || 5000; // 代理连接超时  
     this.nat64Timeout = parseInt(env?.NAT64_TIMEOUT) || 3000; // NAT64兜底超时
     this.writeTimeout = parseInt(env?.WRITE_TIMEOUT) || 5000;
 
