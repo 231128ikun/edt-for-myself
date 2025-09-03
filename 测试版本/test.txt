@@ -10,7 +10,8 @@ class Config {
     this.bestIPs = this.parseList(env?.BEST_IPS) || [
       'developers.cloudflare.com',
       'ip.sb',
-      'www.visa.cn'
+      'www.visa.cn',
+       'ikun.glimmer.cf.090227.xyz'
     ];
     this.proxyIP = url?.searchParams.get('proxyip') || env?.PROXY_IP || 'sjc.o00o.ooo:443';
     // 安全控制
