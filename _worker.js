@@ -3,301 +3,567 @@ import { connect } from 'cloudflare:sockets';
 // ==================== 配置管理 ====================
 class Config {
   constructor(env, url) {
+    // 核心必需参数
     this.userId = env?.USER_ID || '123456';
     this.uuid = env?.UUID || 'aaa6b096-1165-4bbe-935c-99f4ec902d02';
     this.nodeName = env?.NODE_NAME || 'IKUN-Vless';
-    
     this.bestIPs = this.parseList(env?.BEST_IPS) || [
       'developers.cloudflare.com',
-      'ip.sb', 
+      'ip.sb',
       'www.visa.cn',
       'ikun.glimmer.cf.090227.xyz'
     ];
-    
     this.proxyIP = url?.searchParams.get('proxyip') || env?.PROXY_IP || 'sjc.o00o.ooo:443';
-    this.enableNAT64 = env?.ENABLE_NAT64 === 'true';
-    
-    // 预处理UUID为字节数组
-    this.uuidBytes = new Uint8Array(
-      this.uuid.replace(/-/g, '').match(/.{2}/g).map(x => parseInt(x, 16))
-    );
-  }
-  
-  parseList(val) {
-    return typeof val === 'string' ? val.split('\n').filter(Boolean) : val;
-  }
-}
+    // 安全控制
+    this.allowPorts = this._parseNumberList(env?.ALLOW_PORTS || '443,8443,2053,2083,2087,2096');
+    this.denyPorts = this._parseNumberList(env?.DENY_PORTS || '25,110,143,465,587');
+    this.allowHosts = this.parseList(env?.ALLOW_HOSTS);
 
-// ==================== 连接管理 ====================
-async function fastConnect(hostname, port, config) {
-  const attempts = [];
-  
-  // 直连尝试
-  attempts.push(() => connect({ hostname, port }));
-  
-  // NAT64（仅IPv4）
-  if (config.enableNAT64 && /^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
-    const nat64Host = hostname.split('.')
-      .map(n => (+n).toString(16).padStart(2, '0'))
-      .join('');
-    attempts.push(() => connect({ 
-      hostname: `[2001:67c:2960:6464::${nat64Host.slice(0,4)}:${nat64Host.slice(4)}]`, 
-      port 
-    }));
+    // 超时参数 - 关键性能参数
+    this.directTimeout = parseInt(env?.DIRECT_TIMEOUT) || 300; // 直连快速失败
+    this.proxyTimeout = parseInt(env?.PROXY_TIMEOUT) || 1500; // 代理连接超时
+    this.nat64Timeout = parseInt(env?.NAT64_TIMEOUT) || 3000; // NAT64兜底超时
+    this.writeTimeout = parseInt(env?.WRITE_TIMEOUT) || 5000;
+
+    // UUID字节缓存
+    this.uuidBytes = this._parseUUID(this.uuid);
   }
-  
-  // 反代
-  if (config.proxyIP) {
-    const [proxyHost, proxyPort = port] = config.proxyIP.split(':');
-    attempts.push(() => connect({ hostname: proxyHost, port: +proxyPort }));
-  }
-  
-  // 快速失败，快速重试
-  for (const attempt of attempts) {
-    try {
-      const socket = await Promise.race([
-        attempt(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
-      ]);
-      await socket.opened;
-      return socket;
-    } catch {
-      continue;
+
+  _parseUUID(uuid) {
+    const hex = uuid.replace(/-/g, '');
+    const bytes = new Uint8Array(16);
+    for (let i = 0; i < 16; i++) {
+      bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
     }
+    return bytes;
   }
-  
-  throw new Error('Connection failed');
+
+  _parseNumberList(val) {
+    if (!val) return null;
+    return val.split(/[,\n]+/).map(s => parseInt(s.trim())).filter(n => Number.isFinite(n));
+  }
+
+  parseList(val) {
+    if (!val) return null;
+    if (typeof val === 'string') {
+      return val.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+    }
+    return val;
+  }
 }
 
-// ==================== 协议处理 ====================
+// ==================== 辅助函数 ====================
+const textDecoder = new TextDecoder();
+const textEncoder = new TextEncoder();
+
+function isIPv4(host) {
+  if (typeof host !== 'string') return false;
+  const parts = host.split('.');
+  if (parts.length !== 4) return false;
+  for (const p of parts) {
+    if (!/^\d+$/.test(p)) return false;
+    const n = Number(p);
+    if (!Number.isInteger(n) || n < 0 || n > 255) return false;
+  }
+  return true;
+}
+
+function isIPv6(host) {
+  if (!host || typeof host !== 'string') return false;
+  return host.includes(':');
+}
+
+function ipv4ToNat64(ip) {
+  const parts = ip.split('.').map(n => Number(n));
+  const hex = parts.map(n => n.toString(16).padStart(2, '0')).join('');
+  return `2001:67c:2960:6464::${hex.slice(0, 4)}:${hex.slice(4)}`;
+}
+
+function compareUUIDs(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= (a[i] ^ b[i]);
+  return diff === 0;
+}
+
+function isPrivateIPv4(ip) {
+  const p = ip.split('.').map(n => Number(n));
+  if (p[0] === 10) return true;
+  if (p[0] === 127) return true;
+  if (p[0] === 169 && p[1] === 254) return true;
+  if (p[0] === 192 && p[1] === 168) return true;
+  if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true;
+  return false;
+}
+
+function isPrivateIPv6(addr) {
+  if (!addr) return false;
+  const a = addr.toLowerCase();
+  if (a === '::1') return true;
+  if (a.startsWith('fe80:')) return true;
+  if (a.startsWith('fc') || a.startsWith('fd')) return true;
+  return false;
+}
+
+function portAllowed(port, config) {
+  if (!Number.isFinite(port) || port <= 0 || port > 65535) return false;
+  if (config.denyPorts && config.denyPorts.includes(port)) return false;
+  if (!config.allowPorts || config.allowPorts.length === 0) return true;
+  return config.allowPorts.includes(port);
+}
+
+function hostAllowed(host, config) {
+  if (!host) return false;
+  if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);
+  if (isIPv4(host) && isPrivateIPv4(host)) return false;
+  if (isIPv6(host) && isPrivateIPv6(host)) return false;
+  if (config.allowHosts && config.allowHosts.length > 0) {
+    for (const allowed of config.allowHosts) {
+      if (!allowed) continue;
+      if (allowed === host) return true;
+      if (host.endsWith('.' + allowed)) return true;
+    }
+    return false;
+  }
+  return true;
+}
+
+// ==================== VLESS 解析 ====================
 function parseVlessHeader(buffer) {
-  const view = new DataView(buffer.buffer);
-  const uuid = buffer.slice(1, 17);
+  if (!buffer || buffer.length < 18) throw new Error('Invalid VLESS header');
+  const uuid = buffer.subarray(1, 17);
   const optLen = buffer[17];
-  const portIdx = 18 + optLen + 1;
-  const port = view.getUint16(portIdx);
-  const addrType = buffer[portIdx + 2];
-  let addr, addrLen, addrIdx = portIdx + 3;
-  
-  switch (addrType) {
-    case 1: // IPv4
-      addr = buffer.slice(addrIdx, addrIdx + 4).join('.');
-      addrLen = 4;
-      break;
-    case 2: // Domain
-      addrLen = buffer[addrIdx++];
-      addr = new TextDecoder().decode(buffer.slice(addrIdx, addrIdx + addrLen));
-      break;
-    case 3: // IPv6
-      addrLen = 16;
-      const parts = [];
-      for (let i = 0; i < 8; i++) {
-        parts.push(view.getUint16(addrIdx + i * 2).toString(16));
-      }
-      addr = parts.join(':');
-      break;
-    default:
-      throw new Error('Invalid address type');
+  let idx = 18 + optLen;
+  if (buffer.length < idx + 3) throw new Error('Incomplete VLESS header');
+
+  const cmd = buffer[idx]; idx++;
+  const port = (buffer[idx] << 8) | buffer[idx + 1]; idx += 2;
+  const addrType = buffer[idx++];
+
+  let addr;
+  if (addrType === 1) {
+    if (buffer.length < idx + 4) throw new Error('Incomplete IPv4 address');
+    addr = `${buffer[idx]}.${buffer[idx + 1]}.${buffer[idx + 2]}.${buffer[idx + 3]}`;
+    idx += 4;
+  } else if (addrType === 2) {
+    const domainLen = buffer[idx++];
+    if (buffer.length < idx + domainLen) throw new Error('Incomplete domain address');
+    addr = textDecoder.decode(buffer.subarray(idx, idx + domainLen));
+    idx += domainLen;
+  } else if (addrType === 3) {
+    if (buffer.length < idx + 16) throw new Error('Incomplete IPv6 address');
+    const parts = new Array(8);
+    for (let i = 0; i < 8; i++) {
+      const off = idx + i * 2;
+      parts[i] = ((buffer[off] << 8) | buffer[off + 1]).toString(16);
+    }
+    addr = parts.join(':');
+    idx += 16;
+  } else {
+    throw new Error(`Invalid address type: ${addrType}`);
   }
-  
-  return { uuid, port, address: addr, addressType: addrType, initialData: buffer.slice(addrIdx + addrLen) };
+
+  return { uuid, port, address: addr, addressType: addrType, initialData: buffer.subarray(idx) };
 }
 
-// ==================== 数据传输 ====================
-async function streamTransfer(ws, socket, initialData) {
-  const writer = socket.writable.getWriter();
-  
-  // 立即响应成功
-  ws.send(new Uint8Array([0, 0]));
-  
-  // 写入初始数据
-  if (initialData?.length > 0) {
-    await writer.write(initialData);
-  }
-  
-  // 并行双向传输
-  await Promise.allSettled([
-    // WS -> Socket
-    (async () => {
-      const queue = [];
-      let processing = false;
-      
-      ws.addEventListener('message', async ({ data }) => {
-        queue.push(new Uint8Array(data));
-        if (!processing) {
-          processing = true;
-          while (queue.length > 0) {
-            const batch = queue.splice(0, 10);
-            const merged = new Uint8Array(batch.reduce((acc, arr) => acc + arr.length, 0));
-            let offset = 0;
-            for (const arr of batch) {
-              merged.set(arr, offset);
-              offset += arr.length;
-            }
-            try {
-              await writer.write(merged);
-            } catch {
-              break;
-            }
-          }
-          processing = false;
-        }
-      });
-    })(),
-    
-    // Socket -> WS  
-    socket.readable.pipeTo(new WritableStream({
-      write: chunk => ws.send(chunk),
-      abort: () => ws.close()
-    }))
+// ==================== 优化后的连接策略 ====================
+async function connectWithTimeout(target, timeout) {
+  return Promise.race([
+    connect(target),
+    new Promise((_, reject) => 
+      setTimeout(() => reject(new Error(`Connect timeout (${timeout}ms)`)), timeout)
+    )
   ]);
 }
 
-// ==================== WebSocket处理 ====================
-async function handleWebSocket(request, config) {
-  const protocol = request.headers.get('sec-websocket-protocol');
-  if (!protocol) return new Response('Bad Request', { status: 400 });
+async function fastConnect(hostname, port, config) {
+  const errors = [];
   
-  // Base64解码
-  const protocolData = Uint8Array.from(
-    atob(protocol.replace(/-/g, '+').replace(/_/g, '/')),
-    c => c.charCodeAt(0)
-  );
-  
-  // 解析VLESS协议
-  const { uuid, port, address, addressType, initialData } = parseVlessHeader(protocolData);
-  
-  // UUID验证
-  if (!uuid.every((b, i) => b === config.uuidBytes[i])) {
-    return new Response('Unauthorized', { status: 403 });
+  // 1. 优先直连 - 快速失败
+  try {
+    console.log(`Attempting direct connection to ${hostname}:${port}`);
+    const socket = await connectWithTimeout({ hostname, port }, config.directTimeout);
+    if (socket.opened) await socket.opened;
+    console.log('Direct connection successful');
+    return socket;
+  } catch (err) {
+    errors.push(`Direct: ${err.message}`);
+    console.log(`Direct connection failed: ${err.message}`);
   }
+
+  // 2. 如果配置了代理IP，尝试代理连接
+  if (config.proxyIP) {
+    try {
+      const [proxyHost, proxyPortRaw] = config.proxyIP.split(':');
+      const proxyPort = proxyPortRaw ? Number(proxyPortRaw) : port;
+      console.log(`Attempting proxy connection via ${proxyHost}:${proxyPort}`);
+      
+      const socket = await connectWithTimeout({ hostname: proxyHost, port: proxyPort }, config.proxyTimeout);
+      if (socket.opened) await socket.opened;
+      console.log('Proxy connection successful');
+      return socket;
+    } catch (err) {
+      errors.push(`Proxy: ${err.message}`);
+      console.log(`Proxy connection failed: ${err.message}`);
+    }
+  }
+
+  // 3. NAT64兜底 - 仅对IPv4地址
+  if (isIPv4(hostname)) {
+    try {
+      const nat64Host = ipv4ToNat64(hostname);
+      console.log(`Attempting NAT64 connection to ${nat64Host}:${port}`);
+      
+      const socket = await connectWithTimeout({ hostname: nat64Host, port }, config.nat64Timeout);
+      if (socket.opened) await socket.opened;
+      console.log('NAT64 connection successful');
+      return socket;
+    } catch (err) {
+      errors.push(`NAT64: ${err.message}`);
+      console.log(`NAT64 connection failed: ${err.message}`);
+    }
+  }
+
+  // 所有方式都失败
+  throw new Error(`All connection attempts failed: ${errors.join('; ')}`);
+}
+
+// ==================== 数据传输 ====================
+async function writeWithTimeout(writer, chunk, timeout) {
+  return Promise.race([
+    writer.write(chunk),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Write timeout')), timeout))
+  ]);
+}
+
+async function streamTransfer(ws, socket, initialData, config) {
+  const writer = socket.writable.getWriter();
   
-  // 建立目标连接
-  const socket = await fastConnect(
-    addressType === 3 ? `[${address}]` : address,
-    port,
-    config
-  );
-  
-  // 创建WebSocket隧道
-  const [client, server] = new WebSocketPair();
-  server.accept();
-  
-  // 启动数据传输
-  streamTransfer(server, socket, initialData);
-  
-  return new Response(null, { 
-    status: 101, 
-    webSocket: client 
+  // 发送连接确认
+  try { ws.send(new Uint8Array([0, 0])); } catch (e) {}
+
+  // 发送初始数据
+  if (initialData && initialData.length > 0) {
+    try {
+      await writeWithTimeout(writer, initialData, config.writeTimeout);
+    } catch (err) {
+      console.error('Failed to write initial data:', err);
+      throw err;
+    }
+  }
+
+  // 双向数据传输
+  const transfers = [
+    handleWSToSocket(ws, writer, config),
+    handleSocketToWS(socket, ws)
+  ];
+
+  await Promise.allSettled(transfers);
+
+  // 清理资源
+  try { await writer.close(); } catch (e) {}
+  try { if (socket?.close) socket.close(); } catch (e) {}
+  try { if (ws?.close) ws.close(); } catch (e) {}
+}
+
+async function handleWSToSocket(ws, writer, config) {
+  return new Promise((resolve, reject) => {
+    let closed = false;
+
+    async function messageHandler(evt) {
+      if (closed) return;
+      try {
+        let chunk;
+        const data = evt.data;
+        
+        if (typeof data === 'string') {
+          chunk = textEncoder.encode(data);
+        } else if (data instanceof ArrayBuffer) {
+          chunk = new Uint8Array(data);
+        } else if (data instanceof Blob) {
+          const ab = await data.arrayBuffer();
+          chunk = new Uint8Array(ab);
+        } else {
+          chunk = new Uint8Array(data);
+        }
+
+        await writeWithTimeout(writer, chunk, config.writeTimeout);
+      } catch (err) {
+        cleanup();
+        reject(err);
+      }
+    }
+
+    function closeHandler() { cleanup(); resolve(); }
+    function errorHandler(err) { cleanup(); reject(err); }
+    
+    function cleanup() {
+      if (closed) return;
+      closed = true;
+      ws.removeEventListener('message', messageHandler);
+      ws.removeEventListener('close', closeHandler);
+      ws.removeEventListener('error', errorHandler);
+    }
+
+    ws.addEventListener('message', messageHandler);
+    ws.addEventListener('close', closeHandler);
+    ws.addEventListener('error', errorHandler);
   });
 }
 
+async function handleSocketToWS(socket, ws) {
+  const reader = socket.readable.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (ws.readyState !== WebSocket.OPEN) break;
+      try { 
+        ws.send(value); 
+      } catch (err) { 
+        console.error('Failed to send to WebSocket:', err);
+        break; 
+      }
+    }
+  } catch (err) {
+    console.error('Socket read error:', err);
+  } finally {
+    try { reader.releaseLock(); } catch (e) {}
+  }
+}
+
+// ==================== WebSocket 处理 ====================
+async function handleWebSocket(request, config) {
+  const upgradeHeader = request.headers.get('Upgrade');
+  if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
+    return new Response('Bad Request', { status: 400 });
+  }
+
+  const protocolHeader = request.headers.get('sec-websocket-protocol') || '';
+  if (!protocolHeader) return new Response('Missing protocol', { status: 400 });
+
+  const protocols = protocolHeader.split(',').map(s => s.trim()).filter(Boolean);
+  if (protocols.length === 0) return new Response('Invalid protocol', { status: 400 });
+
+  let protocolData;
+  try {
+    const base64 = protocols[0].replace(/-/g, '+').replace(/_/g, '/');
+    protocolData = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+  } catch {
+    return new Response('Invalid protocol encoding', { status: 400 });
+  }
+
+  let vless;
+  try { 
+    vless = parseVlessHeader(protocolData); 
+  } catch (err) { 
+    return new Response(`Protocol error: ${err.message}`, { status: 400 }); 
+  }
+
+  const { uuid, port, address, initialData } = vless;
+
+  // UUID验证
+  if (!compareUUIDs(uuid, config.uuidBytes)) {
+    return new Response('Unauthorized', { status: 403 });
+  }
+
+  // 安全检查
+  if (!portAllowed(port, config)) {
+    return new Response('Port not allowed', { status: 403 });
+  }
+  if (!hostAllowed(address, config)) {
+    return new Response('Host not allowed', { status: 403 });
+  }
+
+  // 建立目标连接
+  let socket;
+  try {
+    const targetHost = (address.startsWith('[') && address.endsWith(']')) ? 
+      address.slice(1, -1) : address;
+    socket = await fastConnect(targetHost, port, config);
+  } catch (err) {
+    console.error(`Connection to ${address}:${port} failed:`, err);
+    return new Response(`Connection failed: ${err.message}`, { status: 502 });
+  }
+
+  // 创建WebSocket对
+  const [client, server] = new WebSocketPair();
+  server.accept();
+
+  // 启动数据传输
+  streamTransfer(server, socket, initialData, config).catch(err => {
+    console.error('Stream transfer error:', err);
+    try { server.close(); } catch (e) {}
+    try { if (socket?.close) socket.close(); } catch (e) {}
+  });
+
+  return new Response(null, { status: 101, webSocket: client });
+}
+
 // ==================== 页面生成 ====================
-function generateHTML(config, host) {
-  const escapeHtml = (str) => str.replace(/[&<>"']/g, m => 
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, m =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
-  
+}
+
+function generateHTML(config, host) {
+  const subLink = `https://${host}/${config.userId}/vless`;
+  const nodeLink = `vless://${config.uuid}@${config.bestIPs[0] || host}:443?encryption=none&security=tls&type=ws&host=${host}&sni=${host}&path=%2F%3Fed%3D2560#${encodeURIComponent(config.nodeName)}`;
+
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>VLESS</title>
+  <title>VLESS Config</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { 
-      font-family: system-ui; 
-      background: linear-gradient(135deg, #667eea, #764ba2); 
-      min-height: 100vh; 
-      display: flex; 
-      justify-content: center; 
-      align-items: center; 
-      padding: 20px; 
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
     }
-    .container { 
-      background: rgba(255, 255, 255, 0.95); 
-      border-radius: 20px; 
-      padding: 30px; 
-      max-width: 500px; 
-      width: 100%; 
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); 
+    .container {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 16px;
+      padding: 32px;
+      max-width: 600px;
+      width: 100%;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+      backdrop-filter: blur(10px);
     }
-    h1 { text-align: center; color: #333; margin-bottom: 20px; }
-    .info { display: grid; gap: 12px; margin-bottom: 20px; }
-    .item { background: #f8f9fa; padding: 12px; border-radius: 8px; }
-    .label { font-size: 12px; color: #666; margin-bottom: 4px; }
-    .value { font-family: monospace; color: #333; word-break: break-all; font-size: 14px; }
-    .box { 
+    h1 { text-align: center; color: #333; margin-bottom: 24px; font-size: 28px; }
+    .info-grid { display: grid; gap: 16px; margin-bottom: 24px; }
+    .info-item { 
       background: #f8f9fa; 
-      border: 2px solid #e9ecef; 
-      border-radius: 8px; 
-      padding: 12px; 
-      position: relative; 
-      margin-bottom: 12px; 
+      padding: 16px; 
+      border-radius: 12px; 
+      border-left: 4px solid #667eea;
     }
-    .text { 
-      font-family: monospace; 
-      word-break: break-all; 
-      padding-right: 70px; 
-      font-size: 13px; 
-      line-height: 1.5; 
+    .label { font-size: 13px; color: #666; margin-bottom: 6px; font-weight: 500; }
+    .value { font-family: 'Monaco', 'Menlo', monospace; color: #333; word-break: break-all; }
+    .section { margin-bottom: 20px; }
+    .section h3 { color: #333; margin-bottom: 12px; font-size: 18px; }
+    .copy-box {
+      background: #f8f9fa;
+      border: 2px solid #e9ecef;
+      border-radius: 12px;
+      padding: 16px;
+      position: relative;
+      transition: all 0.2s ease;
     }
-    .btn { 
-      position: absolute; 
-      right: 8px; 
-      top: 50%; 
-      transform: translateY(-50%); 
-      background: #667eea; 
-      color: white; 
-      border: none; 
-      padding: 6px 12px; 
-      border-radius: 6px; 
-      cursor: pointer; 
-      font-size: 12px; 
+    .copy-box:hover { border-color: #667eea; }
+    .copy-text {
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 13px;
+      line-height: 1.4;
+      word-break: break-all;
+      padding-right: 80px;
+      color: #333;
     }
-    .btn:hover { background: #5a6fd8; }
-    .btn.ok { background: #28a745; }
+    .copy-btn {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: #667eea;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+    .copy-btn:hover { background: #5a6fd8; transform: translateY(-50%) scale(1.05); }
+    .copy-btn.copied { background: #28a745; }
+    .tips {
+      background: #e3f2fd;
+      border: 1px solid #bbdefb;
+      border-radius: 8px;
+      padding: 12px;
+      margin-top: 16px;
+      font-size: 13px;
+      color: #1565c0;
+    }
+    footer {
+      margin-top: 24px;
+      text-align: center;
+      color: #666;
+      font-size: 12px;
+    }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>🚀 VLESS</h1>
-    <div class="info">
-      <div class="item">
+    <h1>🚀 VLESS Config</h1>
+    
+    <div class="info-grid">
+      <div class="info-item">
         <div class="label">节点名称</div>
         <div class="value">${escapeHtml(config.nodeName)}</div>
       </div>
-      <div class="item">
+      <div class="info-item">
         <div class="label">用户ID</div>
         <div class="value">${escapeHtml(config.userId)}</div>
       </div>
-      <div class="item">
+      ${config.proxyIP ? `<div class="info-item">
         <div class="label">代理IP</div>
         <div class="value">${escapeHtml(config.proxyIP)}</div>
+      </div>` : ''}
+    </div>
+
+    <div class="section">
+      <h3>📋 订阅链接</h3>
+      <div class="copy-box">
+        <div class="copy-text" id="sub-link">${subLink}</div>
+        <button class="copy-btn" onclick="copyText('sub-link', this)">复制</button>
       </div>
     </div>
-    <h3>订阅链接</h3>
-    <div class="box">
-      <div class="text" id="s">https://${escapeHtml(host)}/${escapeHtml(config.userId)}/vless</div>
-      <button class="btn" onclick="copyText('s', this)">复制</button>
+
+    <div class="section">
+      <h3>🔗 节点链接</h3>
+      <div class="copy-box">
+        <div class="copy-text" id="node-link">${nodeLink}</div>
+        <button class="copy-btn" onclick="copyText('node-link', this)">复制</button>
+      </div>
     </div>
-    <h3>节点链接</h3>
-    <div class="box">
-      <div class="text" id="n">vless://${escapeHtml(config.uuid)}@${escapeHtml(config.bestIPs[0] || host)}:443?encryption=none&security=tls&type=ws&host=${escapeHtml(host)}&sni=${escapeHtml(host)}&path=%2F%3Fed%3D2560#${escapeHtml(config.nodeName)}</div>
-      <button class="btn" onclick="copyText('n', this)">复制</button>
+
+    <div class="tips">
+      💡 <strong>使用提示:</strong> 在订阅URL后添加 <code>?proxyip=host:port</code> 可自定义代理IP
     </div>
+
+    <footer>
+      Powered by Cloudflare Workers • 请妥善保管您的UUID
+    </footer>
   </div>
+
   <script>
-    function copyText(id, btn) {
-      navigator.clipboard.writeText(document.getElementById(id).textContent).then(() => {
-        const originalText = btn.textContent;
-        btn.textContent = '✓';
-        btn.classList.add('ok');
+    async function copyText(elementId, button) {
+      try {
+        const text = document.getElementById(elementId).textContent;
+        await navigator.clipboard.writeText(text);
+        
+        const originalText = button.textContent;
+        button.textContent = '✓ 已复制';
+        button.classList.add('copied');
+        
         setTimeout(() => {
-          btn.textContent = originalText;
-          btn.classList.remove('ok');
-        }, 1000);
-      });
+          button.textContent = originalText;
+          button.classList.remove('copied');
+        }, 2000);
+      } catch (err) {
+        console.error('复制失败:', err);
+        button.textContent = '复制失败';
+        setTimeout(() => {
+          button.textContent = '复制';
+        }, 2000);
+      }
     }
   </script>
 </body>
@@ -305,10 +571,12 @@ function generateHTML(config, host) {
 }
 
 function generateVlessConfig(host, config) {
-  return [...config.bestIPs, `${host}:443`].map(ip => {
-    const [addr, port = 443] = ip.split(':');
-    return `vless://${config.uuid}@${addr}:${port}?encryption=none&security=tls&type=ws&host=${host}&sni=${host}&path=%2F%3Fed%3D2560#${config.nodeName}`;
-  }).join('\n');
+  return [...(config.bestIPs || []), host]
+    .map(ip => {
+      const [addr, port = 443] = ip.split(':');
+      return `vless://${config.uuid}@${addr}:${port}?encryption=none&security=tls&type=ws&host=${host}&sni=${host}&path=%2F%3Fed%3D2560#${encodeURIComponent(config.nodeName)}`;
+    })
+    .join('\n');
 }
 
 // ==================== 主入口 ====================
@@ -316,33 +584,85 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const config = new Config(env, url);
-    const host = request.headers.get('Host');
-    
+    const host = request.headers.get('Host') || url.host;
+
     try {
-      // WebSocket请求
-      if (request.headers.get('Upgrade') === 'websocket') {
+      // WebSocket升级请求
+      if ((request.headers.get('Upgrade') || '').toLowerCase() === 'websocket') {
         return await handleWebSocket(request, config);
       }
-      
-      // 页面请求
-      switch (url.pathname) {
-        case `/${config.userId}`:
-          return new Response(generateHTML(config, host), {
-            headers: { 'Content-Type': 'text/html; charset=utf-8' }
-          });
-          
-        case `/${config.userId}/vless`:
-          return new Response(generateVlessConfig(host, config), {
-            headers: { 'Content-Type': 'text/plain; charset=utf-8' }
-          });
-          
-        default:
-          return new Response('Not Found', { status: 404 });
+
+      // HTTP路由
+      if (url.pathname === `/${config.userId}`) {
+        return new Response(generateHTML(config, host), {
+          headers: { 
+            'Content-Type': 'text/html; charset=utf-8',
+            'Cache-Control': 'public, max-age=3600'
+          }
+        });
       }
-    } catch (error) {
-      console.error('Error:', error);
-      return new Response(`Error: ${error.message}`, { status: 500 });
+
+      if (url.pathname === `/${config.userId}/vless`) {
+        return new Response(generateVlessConfig(host, config), {
+          headers: { 
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Cache-Control': 'public, max-age=1800'
+          }
+        });
+      }
+
+      return new Response('Not Found', { status: 404 });
+
+    } catch (err) {
+      console.error('Worker error:', err);
+      return new Response(`Internal Error: ${err.message}`, { status: 500 });
     }
   }
 };
+
+// ==================== Durable Object（可选全局限流）====================
+export class ConnectionLimiter {
+  constructor(state, env) {
+    this.state = state;
+    this.maxConnections = Number(env.MAX_GLOBAL_CONNECTIONS) || 100;
+    this.currentCount = 0;
+    this.initialized = false;
+  }
+
+  async init() {
+    if (this.initialized) return;
+    const stored = await this.state.storage.get('connectionCount');
+    this.currentCount = Number(stored) || 0;
+    this.initialized = true;
+  }
+
+  async fetch(request) {
+    await this.init();
+    const url = new URL(request.url);
+    
+    if (request.method === 'POST' && url.pathname === '/acquire') {
+      if (this.currentCount < this.maxConnections) {
+        this.currentCount++;
+        await this.state.storage.put('connectionCount', this.currentCount);
+        return Response.json({ success: true, count: this.currentCount });
+      }
+      return Response.json({ success: false, reason: 'limit_exceeded' }, { status: 429 });
+    }
+    
+    if (request.method === 'POST' && url.pathname === '/release') {
+      this.currentCount = Math.max(0, this.currentCount - 1);
+      await this.state.storage.put('connectionCount', this.currentCount);
+      return Response.json({ success: true, count: this.currentCount });
+    }
+    
+    if (request.method === 'GET' && url.pathname === '/status') {
+      return Response.json({ 
+        current: this.currentCount, 
+        max: this.maxConnections 
+      });
+    }
+
+    return new Response('Not Found', { status: 404 });
+  }
+}
 
