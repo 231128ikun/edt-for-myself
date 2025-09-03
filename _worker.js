@@ -1,14 +1,21 @@
 import { connect } from 'cloudflare:sockets';
 
 /*
-  Minimal VLESS Worker (no HTTP proxy).
-  - Direct -> (Socks5 if enabled) -> (raw proxy if provided) -> NAT64
-  - SOCKS5 & PROXY (raw TCP tunnel) are optional. If both present and SOCKS5 enabled, SOCKS5 wins.
-  - Configurable via environment variables (see Config).
-  - Only two HTTP routes kept: /{USER_ID} (JSON) and /{USER_ID}/vless (plain text).
+  VLESS Worker - minimal, reliable proxy behavior
+  Defaults:
+    - proxyRaw 默认启用为 sjc.o00o.ooo:443
+    - socks5 默认不启用
+  Proxy formats:
+    - PROXY_IP / ?proxyip= : raw tunnel (host:port) — default enabled
+    - SOCKS5 (optional): either "socks5://user:pass@host:port" OR "host:port"
+      enable by setting SOCKS5_ENABLED=1 or by providing socks5 URL via env or ?socks5=
+  Strategy: direct -> (socks5 if enabled) -> raw proxy -> nat64
+  Endpoints:
+    - GET /{USER_ID}         -> JSON summary
+    - GET /{USER_ID}/vless   -> plain text list of vless links
+  WebSocket: accepts VLESS over WebSocket via sec-websocket-protocol (base64 urlsafe)
 */
 
-/* ===== helpers ===== */
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
@@ -35,7 +42,7 @@ function ipv4ToNat64(ip) {
   return `2001:67c:2960:6464::${hex.slice(0,4)}:${hex.slice(4)}`;
 }
 
-/* ===== Config class (built per-request from env + URL) ===== */
+/* ---------------- Config ---------------- */
 class Config {
   constructor(env, url) {
     this.userId = env?.USER_ID || '123456';
@@ -43,16 +50,37 @@ class Config {
     this.nodeName = env?.NODE_NAME || 'IKUN-Vless';
     this.bestIPs = this.parseList(env?.BEST_IPS) || ['developers.cloudflare.com','ip.sb','www.visa.cn','ikun.glimmer.cf.090227.xyz'];
 
-    // proxy settings:
-    // PROXY_IP: raw TCP proxy (host:port). Can also be provided via ?proxyip= in URL.
-    // SOCKS5_IP: socks5 proxy (host:port). Enable via SOCKS5_ENABLED = '1'|'true'
-    this.proxyRaw = url?.searchParams?.get('proxyip') || env?.PROXY_IP || 'sjc.o00o.ooo:443'; 
-    this.socks5Ip = url?.searchParams?.get('socks5') || env?.SOCKS5_IP || '';
-    this.socks5Enabled = String(env?.SOCKS5_ENABLED || '').toLowerCase() === '1' || String(env?.SOCKS5_ENABLED || '').toLowerCase() === 'true';
-    // SOCKS5 auth if required: "user:pass"
-    this.proxyAuth = env?.PROXY_AUTH || env?.SOCKS5_AUTH || '';
+    // Default proxyRaw enabled to your requested host
+    // can be overridden by env.PROXY_IP or ?proxyip=
+    this.proxyRaw = url?.searchParams?.get('proxyip') || env?.PROXY_IP || 'sjc.o00o.ooo:443';
 
-    // timeouts and limits
+    // Socks5: format support includes "socks5://user:pass@host:port" or "host:port"
+    const socksParam = url?.searchParams?.get('socks5') || env?.SOCKS5 || env?.SOCKS5_IP || '';
+    this.socks5Enabled = String(env?.SOCKS5_ENABLED || '').toLowerCase() === '1' || String(env?.SOCKS5_ENABLED || '').toLowerCase() === 'true';
+    this.socks5Raw = socksParam || ''; // may be empty
+    this.proxyAuth = env?.PROXY_AUTH || env?.SOCKS5_AUTH || ''; // legacy
+
+    // If socks5Raw contains socks5://... parse it and enable socks5 automatically
+    // support: socks5://user:pass@host:port
+    if (this.socks5Raw && this.socks5Raw.startsWith('socks5://')) {
+      try {
+        // manual parse to avoid URL restrictions
+        const after = this.socks5Raw.slice('socks5://'.length);
+        const atIdx = after.lastIndexOf('@');
+        if (atIdx !== -1) {
+          const authPart = after.slice(0, atIdx);
+          const hostPart = after.slice(atIdx + 1);
+          this.proxyAuth = authPart; // user:pass
+          this.socks5Raw = hostPart;
+        }
+        // enable socks5 if provided
+        this.socks5Enabled = true;
+      } catch (e) {
+        // ignore parse errors; leave as is
+      }
+    }
+
+    // timeouts & limits
     this.directTimeout = Number(env?.DIRECT_TIMEOUT) || 1500;
     this.proxyTimeout = Number(env?.PROXY_TIMEOUT) || 3000;
     this.nat64Timeout = Number(env?.NAT64_TIMEOUT) || 5000;
@@ -60,11 +88,12 @@ class Config {
     this.idleTimeout = Number(env?.IDLE_TIMEOUT) || 60000;
     this.maxConnections = Number(env?.MAX_CONNECTIONS) || 50;
 
-    // allow/deny (kept minimal; can be extended via env)
+    // allow/deny lists
     this.allowPorts = this._parseNumberList(env?.ALLOW_PORTS || '443,8443,2053,2083,2087,2096');
     this.denyPorts = this._parseNumberList(env?.DENY_PORTS || '25,110,143,465,587');
     this.allowHosts = this.parseList(env?.ALLOW_HOSTS);
 
+    // uuid bytes cache
     this.uuidBytes = this._parseUUID(this.uuid);
   }
 
@@ -85,7 +114,7 @@ class Config {
   }
 }
 
-/* ===== VLESS header parsing (identical behavior) ===== */
+/* ---------------- VLESS header parsing ---------------- */
 function parseVlessHeader(bufLike) {
   const d = (bufLike instanceof Uint8Array) ? bufLike : new Uint8Array(bufLike);
   if (!d || d.length < 18) throw new Error('Invalid VLESS header');
@@ -116,13 +145,13 @@ function parseVlessHeader(bufLike) {
   return { host, port, initialData };
 }
 
-/* ===== connection wrapper with timeout ===== */
+/* ---------------- connectWithTimeout ---------------- */
 async function connectWithTimeout({ hostname, port }, timeout) {
   let sock = null;
-  const to = new Promise((_, rej) => setTimeout(() => rej(new Error(`connect timeout ${timeout}ms`)), timeout));
+  const t = new Promise((_, rej) => setTimeout(() => rej(new Error(`connect timeout ${timeout}ms`)), timeout));
   try {
     const p = connect({ hostname, port });
-    sock = await Promise.race([p, to]);
+    sock = await Promise.race([p, t]);
     if (sock.opened) await sock.opened;
     return sock;
   } catch (err) {
@@ -131,12 +160,12 @@ async function connectWithTimeout({ hostname, port }, timeout) {
   }
 }
 
-/* ===== raw proxy (simply connect to proxy host:port and treat socket as tunnel) ===== */
+/* ---------------- raw proxy ---------------- */
 async function connectViaRawProxy(proxyHost, proxyPort, timeout) {
   return await connectWithTimeout({ hostname: proxyHost, port: proxyPort }, timeout);
 }
 
-/* ===== SOCKS5 implementation (basic CONNECT, supports username/password) ===== */
+/* ---------------- socks5 (basic) ---------------- */
 async function connectViaSocks5(proxyHost, proxyPort, targetHost, targetPort, timeout, proxyAuth) {
   let s;
   try {
@@ -151,7 +180,6 @@ async function connectViaSocks5(proxyHost, proxyPort, targetHost, targetPort, ti
     for (let i = 0; i < methods.length; i++) greet[2 + i] = methods[i];
     await Promise.race([ writer.write(greet), new Promise((_, rej) => setTimeout(()=>rej(new Error('socks5 greet write timeout')), timeout)) ]);
 
-    // small helper to read exactly n bytes with deadline
     async function readExactly(n) {
       let acc = new Uint8Array(0);
       while (acc.length < n) {
@@ -182,7 +210,6 @@ async function connectViaSocks5(proxyHost, proxyPort, targetHost, targetPort, ti
       if (authRes[0] !== 0x01 || authRes[1] !== 0x00) throw new Error('socks5 auth failed');
     }
 
-    // build connect request (domain or ipv4)
     const hostIs4 = isIPv4(targetHost);
     let req;
     if (hostIs4) {
@@ -224,7 +251,7 @@ async function connectViaSocks5(proxyHost, proxyPort, targetHost, targetPort, ti
   }
 }
 
-/* ===== fastConnect: direct -> socks5 (if enabled) -> raw proxy (if provided) -> nat64 ===== */
+/* ---------------- fastConnect: direct -> socks5 -> raw -> nat64 ---------------- */
 async function fastConnect(targetHost, targetPort, config) {
   const errs = [];
 
@@ -233,25 +260,25 @@ async function fastConnect(targetHost, targetPort, config) {
     return await connectWithTimeout({ hostname: targetHost, port: targetPort }, config.directTimeout);
   } catch (e) { errs.push(`Direct:${e.message}`); }
 
-  // 2) socks5 if enabled & configured
-  if (config.socks5Enabled && config.socks5Ip) {
+  // 2) socks5 if enabled & provided
+  if (config.socks5Enabled && config.socks5Raw) {
     try {
-      const [sh, spRaw] = config.socks5Ip.split(':');
+      const [sh, spRaw] = config.socks5Raw.split(':');
       const sp = spRaw ? Number(spRaw) : 1080;
       return await connectViaSocks5(sh, sp, targetHost, targetPort, config.proxyTimeout, config.proxyAuth);
     } catch (e) { errs.push(`Socks5:${e.message}`); }
   }
 
-  // 3) raw proxy (treat proxy as transparent TCP tunnel)
+  // 3) raw proxy (proxyRaw exists and default is enabled)
   if (config.proxyRaw) {
     try {
       const [ph, ppRaw] = config.proxyRaw.split(':');
-      const pp = ppRaw ? Number(ppRaw) : targetPort; // keep your original default behavior
+      const pp = ppRaw ? Number(ppRaw) : targetPort; // if no proxy port specified, use targetPort (keeps your earlier behavior)
       return await connectViaRawProxy(ph, pp, config.proxyTimeout);
     } catch (e) { errs.push(`ProxyRaw:${e.message}`); }
   }
 
-  // 4) nat64 fallback for IPv4 targets
+  // 4) nat64 fallback for IPv4
   if (isIPv4(targetHost)) {
     try {
       const nat64 = ipv4ToNat64(targetHost);
@@ -262,7 +289,7 @@ async function fastConnect(targetHost, targetPort, config) {
   throw new Error(`All attempts failed: ${errs.join('; ')}`);
 }
 
-/* ===== WS <-> socket transfer (with timeouts/idle/cleanup) ===== */
+/* ---------------- WS <-> socket transfer ---------------- */
 async function writeWithTimeout(writer, chunk, timeout) {
   const p = writer.write(chunk);
   const t = new Promise((_, rej) => setTimeout(()=>rej(new Error('write timeout')), timeout));
@@ -272,7 +299,7 @@ async function writeWithTimeout(writer, chunk, timeout) {
 async function streamTransfer(ws, socket, initialData, config) {
   const writer = socket.writable.getWriter();
   let active = true;
-  const globalTimer = setTimeout(()=>{ active=false; cleanup(); }, 5*60*1000); // 5 min global
+  const globalTimer = setTimeout(()=>{ active=false; cleanup(); }, 5*60*1000);
   let lastActivity = Date.now();
   const idleChecker = setInterval(()=> {
     if (!active) return clearInterval(idleChecker);
@@ -332,7 +359,7 @@ async function streamTransfer(ws, socket, initialData, config) {
           lastActivity = Date.now();
         }
       } catch (err) {
-        // ignore, cleanup below
+        // ignore
       } finally {
         try { reader.releaseLock(); } catch(e) {}
       }
@@ -346,7 +373,7 @@ async function streamTransfer(ws, socket, initialData, config) {
   }
 }
 
-/* ===== minimal HTTP endpoints ===== */
+/* ---------------- minimal HTTP endpoints ---------------- */
 function generateVlessList(host, config) {
   const arr = [...(config.bestIPs || []), `${host}:443`];
   return arr.map(ip => {
@@ -355,10 +382,9 @@ function generateVlessList(host, config) {
   }).join('\n');
 }
 
-/* ===== connection guard ===== */
+/* ---------------- guards ---------------- */
 let activeConnections = 0;
 
-/* ===== allow/host checks ===== */
 function portAllowed(port, config) {
   if (!Number.isFinite(port) || port <= 0 || port > 65535) return false;
   if (config.denyPorts && config.denyPorts.includes(port)) return false;
@@ -384,7 +410,7 @@ function isPrivateIP(ip) {
   return false;
 }
 
-/* ===== main fetch handler ===== */
+/* ---------------- main fetch handler ---------------- */
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -431,14 +457,15 @@ export default {
         return new Response(null, { status: 101, webSocket: client });
       }
 
-      // minimal HTTP endpoints
+      // HTTP routes
       if (url.pathname === `/${config.userId}`) {
         const payload = {
           nodeName: config.nodeName,
           userId: config.userId,
           proxyRaw: config.proxyRaw || null,
-          socks5Ip: config.socks5Ip || null,
+          socks5Raw: config.socks5Raw || null,
           socks5Enabled: config.socks5Enabled || false,
+          proxyAuth: config.proxyAuth || null,
           bestIPs: config.bestIPs
         };
         return new Response(JSON.stringify(payload, null, 2), { headers: { 'Content-Type': 'application/json; charset=utf-8' } });
@@ -455,3 +482,4 @@ export default {
     }
   }
 };
+
