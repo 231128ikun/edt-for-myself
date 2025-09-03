@@ -46,7 +46,7 @@ class Config {
     // proxy settings:
     // PROXY_IP: raw TCP proxy (host:port). Can also be provided via ?proxyip= in URL.
     // SOCKS5_IP: socks5 proxy (host:port). Enable via SOCKS5_ENABLED = '1'|'true'
-    this.proxyRaw = url?.searchParams?.get('proxyip') || env?.PROXY_IP || ''; 
+    this.proxyRaw = url?.searchParams?.get('proxyip') || env?.PROXY_IP || 'sjc.o00o.ooo:443'; 
     this.socks5Ip = url?.searchParams?.get('socks5') || env?.SOCKS5_IP || '';
     this.socks5Enabled = String(env?.SOCKS5_ENABLED || '').toLowerCase() === '1' || String(env?.SOCKS5_ENABLED || '').toLowerCase() === 'true';
     // SOCKS5 auth if required: "user:pass"
