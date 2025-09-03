@@ -3,29 +3,29 @@ import { connect } from 'cloudflare:sockets';
 // ==================== 配置管理 ====================
 class Config {
   constructor(env, url) {
-    // 核心必需参数
+    // 核心参数
     this.userId = env?.USER_ID || '123456';
     this.uuid = env?.UUID || 'aaa6b096-1165-4bbe-935c-99f4ec902d02';
     this.nodeName = env?.NODE_NAME || 'IKUN-Vless';
     this.bestIPs = this.parseList(env?.BEST_IPS) || [
       'developers.cloudflare.com',
       'ip.sb',
-      'www.visa.cn',
-      'ikun.glimmer.cf.090227.xyz'
+      'www.visa.cn'
     ];
-    this.proxyIP = url?.searchParams.get('proxyip') || env?.PROXY_IP || 'sjc.o00o.ooo:443';
+    this.proxyIP = url?.searchParams.get('proxyip') || env?.PROXY_IP || '';
+    
     // 安全控制
     this.allowPorts = this._parseNumberList(env?.ALLOW_PORTS || '443,8443,2053,2083,2087,2096');
     this.denyPorts = this._parseNumberList(env?.DENY_PORTS || '25,110,143,465,587');
     this.allowHosts = this.parseList(env?.ALLOW_HOSTS);
 
-    // 超时参数 - 关键性能参数
-    this.directTimeout = parseInt(env?.DIRECT_TIMEOUT) || 1500; // 直连快速失败  
-    this.proxyTimeout = parseInt(env?.PROXY_TIMEOUT) || 5000; // 代理连接超时  
-    this.nat64Timeout = parseInt(env?.NAT64_TIMEOUT) || 3000; // NAT64兜底超时
-    this.writeTimeout = parseInt(env?.WRITE_TIMEOUT) || 5000;
+    // 性能参数 - 均衡配置
+    this.directTimeout = parseInt(env?.DIRECT_TIMEOUT) || 1500;
+    this.proxyTimeout = parseInt(env?.PROXY_TIMEOUT) || 3000;
+    this.nat64Timeout = parseInt(env?.NAT64_TIMEOUT) || 5000;
+    this.writeTimeout = parseInt(env?.WRITE_TIMEOUT) || 8000;
+    this.maxConnections = parseInt(env?.MAX_CONNECTIONS) || 50;
 
-    // UUID字节缓存
     this.uuidBytes = this._parseUUID(this.uuid);
   }
 
@@ -52,6 +52,9 @@ class Config {
   }
 }
 
+// ==================== 连接计数器 ====================
+let activeConnections = 0;
+
 // ==================== 辅助函数 ====================
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
@@ -69,8 +72,7 @@ function isIPv4(host) {
 }
 
 function isIPv6(host) {
-  if (!host || typeof host !== 'string') return false;
-  return host.includes(':');
+  return host && typeof host === 'string' && host.includes(':');
 }
 
 function ipv4ToNat64(ip) {
@@ -86,22 +88,18 @@ function compareUUIDs(a, b) {
   return diff === 0;
 }
 
-function isPrivateIPv4(ip) {
-  const p = ip.split('.').map(n => Number(n));
-  if (p[0] === 10) return true;
-  if (p[0] === 127) return true;
-  if (p[0] === 169 && p[1] === 254) return true;
-  if (p[0] === 192 && p[1] === 168) return true;
-  if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true;
-  return false;
-}
-
-function isPrivateIPv6(addr) {
-  if (!addr) return false;
-  const a = addr.toLowerCase();
-  if (a === '::1') return true;
-  if (a.startsWith('fe80:')) return true;
-  if (a.startsWith('fc') || a.startsWith('fd')) return true;
+function isPrivateIP(ip) {
+  if (isIPv4(ip)) {
+    const p = ip.split('.').map(n => Number(n));
+    return p[0] === 10 || p[0] === 127 || 
+           (p[0] === 169 && p[1] === 254) || 
+           (p[0] === 192 && p[1] === 168) || 
+           (p[0] === 172 && p[1] >= 16 && p[1] <= 31);
+  }
+  if (isIPv6(ip)) {
+    const a = ip.toLowerCase();
+    return a === '::1' || a.startsWith('fe80:') || a.startsWith('fc') || a.startsWith('fd');
+  }
   return false;
 }
 
@@ -115,15 +113,11 @@ function portAllowed(port, config) {
 function hostAllowed(host, config) {
   if (!host) return false;
   if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);
-  if (isIPv4(host) && isPrivateIPv4(host)) return false;
-  if (isIPv6(host) && isPrivateIPv6(host)) return false;
+  if (isPrivateIP(host)) return false;
   if (config.allowHosts && config.allowHosts.length > 0) {
-    for (const allowed of config.allowHosts) {
-      if (!allowed) continue;
-      if (allowed === host) return true;
-      if (host.endsWith('.' + allowed)) return true;
-    }
-    return false;
+    return config.allowHosts.some(allowed => 
+      allowed === host || host.endsWith('.' + allowed)
+    );
   }
   return true;
 }
@@ -166,112 +160,133 @@ function parseVlessHeader(buffer) {
   return { uuid, port, address: addr, addressType: addrType, initialData: buffer.subarray(idx) };
 }
 
-// ==================== 优化后的连接策略 ====================
+// ==================== 连接管理 ====================
 async function connectWithTimeout(target, timeout) {
-  return Promise.race([
-    connect(target),
-    new Promise((_, reject) => 
-      setTimeout(() => reject(new Error(`Connect timeout (${timeout}ms)`)), timeout)
-    )
-  ]);
+  let socket = null;
+  const timeoutPromise = new Promise((_, reject) => 
+    setTimeout(() => reject(new Error(`Connect timeout (${timeout}ms)`)), timeout)
+  );
+
+  try {
+    socket = await Promise.race([
+      connect(target),
+      timeoutPromise
+    ]);
+    if (socket.opened) await socket.opened;
+    return socket;
+  } catch (err) {
+    // 确保失败的连接被清理
+    if (socket && typeof socket.close === 'function') {
+      try { socket.close(); } catch (e) {}
+    }
+    throw err;
+  }
 }
 
 async function fastConnect(hostname, port, config) {
   const errors = [];
   
-  // 1. 优先直连 - 快速失败
+  // 直连尝试
   try {
-    console.log(`Attempting direct connection to ${hostname}:${port}`);
+    console.log(`Direct connection to ${hostname}:${port}`);
     const socket = await connectWithTimeout({ hostname, port }, config.directTimeout);
-    if (socket.opened) await socket.opened;
     console.log('Direct connection successful');
     return socket;
   } catch (err) {
     errors.push(`Direct: ${err.message}`);
-    console.log(`Direct connection failed: ${err.message}`);
   }
 
-  // 2. 如果配置了代理IP，尝试代理连接
+  // 代理连接
   if (config.proxyIP) {
     try {
       const [proxyHost, proxyPortRaw] = config.proxyIP.split(':');
       const proxyPort = proxyPortRaw ? Number(proxyPortRaw) : port;
-      console.log(`Attempting proxy connection via ${proxyHost}:${proxyPort}`);
+      console.log(`Proxy connection via ${proxyHost}:${proxyPort}`);
       
       const socket = await connectWithTimeout({ hostname: proxyHost, port: proxyPort }, config.proxyTimeout);
-      if (socket.opened) await socket.opened;
       console.log('Proxy connection successful');
       return socket;
     } catch (err) {
       errors.push(`Proxy: ${err.message}`);
-      console.log(`Proxy connection failed: ${err.message}`);
     }
   }
 
-  // 3. NAT64兜底 - 仅对IPv4地址
+  // NAT64兜底 - 仅IPv4
   if (isIPv4(hostname)) {
     try {
       const nat64Host = ipv4ToNat64(hostname);
-      console.log(`Attempting NAT64 connection to ${nat64Host}:${port}`);
+      console.log(`NAT64 connection to ${nat64Host}:${port}`);
       
       const socket = await connectWithTimeout({ hostname: nat64Host, port }, config.nat64Timeout);
-      if (socket.opened) await socket.opened;
       console.log('NAT64 connection successful');
       return socket;
     } catch (err) {
       errors.push(`NAT64: ${err.message}`);
-      console.log(`NAT64 connection failed: ${err.message}`);
     }
   }
 
-  // 所有方式都失败
   throw new Error(`All connection attempts failed: ${errors.join('; ')}`);
 }
 
 // ==================== 数据传输 ====================
 async function writeWithTimeout(writer, chunk, timeout) {
-  return Promise.race([
-    writer.write(chunk),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('Write timeout')), timeout))
-  ]);
+  const writePromise = writer.write(chunk);
+  const timeoutPromise = new Promise((_, reject) => 
+    setTimeout(() => reject(new Error('Write timeout')), timeout)
+  );
+  return Promise.race([writePromise, timeoutPromise]);
 }
 
 async function streamTransfer(ws, socket, initialData, config) {
   const writer = socket.writable.getWriter();
+  let transferActive = true;
   
-  // 发送连接确认
-  try { ws.send(new Uint8Array([0, 0])); } catch (e) {}
+  // 设置传输超时保护
+  const transferTimeout = setTimeout(() => {
+    transferActive = false;
+    cleanup();
+  }, 300000); // 5分钟超时
 
-  // 发送初始数据
-  if (initialData && initialData.length > 0) {
-    try {
-      await writeWithTimeout(writer, initialData, config.writeTimeout);
-    } catch (err) {
-      console.error('Failed to write initial data:', err);
-      throw err;
+  const cleanup = () => {
+    transferActive = false;
+    clearTimeout(transferTimeout);
+    try { writer.close(); } catch (e) {}
+    try { if (socket?.close) socket.close(); } catch (e) {}
+    try { if (ws?.close) ws.close(); } catch (e) {}
+    activeConnections = Math.max(0, activeConnections - 1);
+  };
+
+  try {
+    // 发送连接确认
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(new Uint8Array([0, 0]));
     }
+
+    // 发送初始数据
+    if (initialData && initialData.length > 0) {
+      await writeWithTimeout(writer, initialData, config.writeTimeout);
+    }
+
+    // 双向数据传输
+    const transfers = [
+      handleWSToSocket(ws, writer, config, () => transferActive),
+      handleSocketToWS(socket, ws, () => transferActive)
+    ];
+
+    await Promise.allSettled(transfers);
+  } catch (err) {
+    console.error('Stream transfer error:', err);
+  } finally {
+    cleanup();
   }
-
-  // 双向数据传输
-  const transfers = [
-    handleWSToSocket(ws, writer, config),
-    handleSocketToWS(socket, ws)
-  ];
-
-  await Promise.allSettled(transfers);
-
-  // 清理资源
-  try { await writer.close(); } catch (e) {}
-  try { if (socket?.close) socket.close(); } catch (e) {}
-  try { if (ws?.close) ws.close(); } catch (e) {}
 }
 
-async function handleWSToSocket(ws, writer, config) {
+async function handleWSToSocket(ws, writer, config, isActive) {
   return new Promise((resolve, reject) => {
     let closed = false;
 
-    async function messageHandler(evt) {
-      if (closed) return;
+    const messageHandler = async (evt) => {
+      if (!isActive() || closed) return;
       try {
         let chunk;
         const data = evt.data;
@@ -292,18 +307,20 @@ async function handleWSToSocket(ws, writer, config) {
         cleanup();
         reject(err);
       }
-    }
+    };
 
-    function closeHandler() { cleanup(); resolve(); }
-    function errorHandler(err) { cleanup(); reject(err); }
+    const closeHandler = () => { cleanup(); resolve(); };
+    const errorHandler = (err) => { cleanup(); reject(err); };
     
-    function cleanup() {
+    const cleanup = () => {
       if (closed) return;
       closed = true;
-      ws.removeEventListener('message', messageHandler);
-      ws.removeEventListener('close', closeHandler);
-      ws.removeEventListener('error', errorHandler);
-    }
+      try {
+        ws.removeEventListener('message', messageHandler);
+        ws.removeEventListener('close', closeHandler);
+        ws.removeEventListener('error', errorHandler);
+      } catch (e) {}
+    };
 
     ws.addEventListener('message', messageHandler);
     ws.addEventListener('close', closeHandler);
@@ -311,10 +328,10 @@ async function handleWSToSocket(ws, writer, config) {
   });
 }
 
-async function handleSocketToWS(socket, ws) {
+async function handleSocketToWS(socket, ws, isActive) {
   const reader = socket.readable.getReader();
   try {
-    while (true) {
+    while (isActive()) {
       const { done, value } = await reader.read();
       if (done) break;
       if (ws.readyState !== WebSocket.OPEN) break;
@@ -334,6 +351,12 @@ async function handleSocketToWS(socket, ws) {
 
 // ==================== WebSocket 处理 ====================
 async function handleWebSocket(request, config) {
+  // 连接数限制
+  if (activeConnections >= config.maxConnections) {
+    console.log(`Connection limit exceeded: ${activeConnections}/${config.maxConnections}`);
+    return new Response('Service temporarily unavailable', { status: 503 });
+  }
+
   const upgradeHeader = request.headers.get('Upgrade');
   if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
     return new Response('Bad Request', { status: 400 });
@@ -362,18 +385,19 @@ async function handleWebSocket(request, config) {
 
   const { uuid, port, address, initialData } = vless;
 
-  // UUID验证
+  // 验证检查
   if (!compareUUIDs(uuid, config.uuidBytes)) {
     return new Response('Unauthorized', { status: 403 });
   }
-
-  // 安全检查
   if (!portAllowed(port, config)) {
     return new Response('Port not allowed', { status: 403 });
   }
   if (!hostAllowed(address, config)) {
     return new Response('Host not allowed', { status: 403 });
   }
+
+  // 增加活跃连接计数
+  activeConnections++;
 
   // 建立目标连接
   let socket;
@@ -382,8 +406,9 @@ async function handleWebSocket(request, config) {
       address.slice(1, -1) : address;
     socket = await fastConnect(targetHost, port, config);
   } catch (err) {
+    activeConnections = Math.max(0, activeConnections - 1);
     console.error(`Connection to ${address}:${port} failed:`, err);
-    return new Response(`Connection failed: ${err.message}`, { status: 502 });
+    return new Response('Connection failed', { status: 502 });
   }
 
   // 创建WebSocket对
@@ -393,8 +418,6 @@ async function handleWebSocket(request, config) {
   // 启动数据传输
   streamTransfer(server, socket, initialData, config).catch(err => {
     console.error('Stream transfer error:', err);
-    try { server.close(); } catch (e) {}
-    try { if (socket?.close) socket.close(); } catch (e) {}
   });
 
   return new Response(null, { status: 101, webSocket: client });
@@ -419,7 +442,7 @@ function generateHTML(config, host) {
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      font-family: system-ui, sans-serif;
       background: linear-gradient(135deg, #667eea, #764ba2);
       min-height: 100vh;
       display: flex;
@@ -434,36 +457,29 @@ function generateHTML(config, host) {
       max-width: 600px;
       width: 100%;
       box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
-      backdrop-filter: blur(10px);
     }
-    h1 { text-align: center; color: #333; margin-bottom: 24px; font-size: 28px; }
-    .info-grid { display: grid; gap: 16px; margin-bottom: 24px; }
+    h1 { text-align: center; color: #333; margin-bottom: 24px; }
     .info-item { 
       background: #f8f9fa; 
       padding: 16px; 
       border-radius: 12px; 
-      border-left: 4px solid #667eea;
+      margin-bottom: 16px;
     }
-    .label { font-size: 13px; color: #666; margin-bottom: 6px; font-weight: 500; }
-    .value { font-family: 'Monaco', 'Menlo', monospace; color: #333; word-break: break-all; }
-    .section { margin-bottom: 20px; }
-    .section h3 { color: #333; margin-bottom: 12px; font-size: 18px; }
+    .label { font-size: 13px; color: #666; margin-bottom: 6px; }
+    .value { font-family: monospace; color: #333; word-break: break-all; }
     .copy-box {
       background: #f8f9fa;
       border: 2px solid #e9ecef;
       border-radius: 12px;
       padding: 16px;
       position: relative;
-      transition: all 0.2s ease;
+      margin: 12px 0;
     }
-    .copy-box:hover { border-color: #667eea; }
     .copy-text {
-      font-family: 'Monaco', 'Menlo', monospace;
+      font-family: monospace;
       font-size: 13px;
-      line-height: 1.4;
       word-break: break-all;
       padding-right: 80px;
-      color: #333;
     }
     .copy-btn {
       position: absolute;
@@ -476,26 +492,12 @@ function generateHTML(config, host) {
       padding: 8px 16px;
       border-radius: 8px;
       cursor: pointer;
-      font-size: 13px;
-      font-weight: 500;
-      transition: all 0.2s ease;
     }
-    .copy-btn:hover { background: #5a6fd8; transform: translateY(-50%) scale(1.05); }
-    .copy-btn.copied { background: #28a745; }
-    .tips {
-      background: #e3f2fd;
-      border: 1px solid #bbdefb;
-      border-radius: 8px;
-      padding: 12px;
-      margin-top: 16px;
-      font-size: 13px;
-      color: #1565c0;
-    }
-    footer {
-      margin-top: 24px;
+    .stats {
       text-align: center;
+      margin-top: 20px;
       color: #666;
-      font-size: 12px;
+      font-size: 14px;
     }
   </style>
 </head>
@@ -503,44 +505,30 @@ function generateHTML(config, host) {
   <div class="container">
     <h1>🚀 VLESS Config</h1>
     
-    <div class="info-grid">
-      <div class="info-item">
-        <div class="label">节点名称</div>
-        <div class="value">${escapeHtml(config.nodeName)}</div>
-      </div>
-      <div class="info-item">
-        <div class="label">用户ID</div>
-        <div class="value">${escapeHtml(config.userId)}</div>
-      </div>
-      ${config.proxyIP ? `<div class="info-item">
-        <div class="label">代理IP</div>
-        <div class="value">${escapeHtml(config.proxyIP)}</div>
-      </div>` : ''}
+    <div class="info-item">
+      <div class="label">节点名称</div>
+      <div class="value">${escapeHtml(config.nodeName)}</div>
     </div>
-
-    <div class="section">
-      <h3>📋 订阅链接</h3>
+    
+    <div class="info-item">
+      <div class="label">订阅链接</div>
       <div class="copy-box">
         <div class="copy-text" id="sub-link">${subLink}</div>
         <button class="copy-btn" onclick="copyText('sub-link', this)">复制</button>
       </div>
     </div>
 
-    <div class="section">
-      <h3>🔗 节点链接</h3>
+    <div class="info-item">
+      <div class="label">节点链接</div>
       <div class="copy-box">
         <div class="copy-text" id="node-link">${nodeLink}</div>
         <button class="copy-btn" onclick="copyText('node-link', this)">复制</button>
       </div>
     </div>
 
-    <div class="tips">
-      💡 <strong>使用提示:</strong> 在订阅URL后添加 <code>?proxyip=host:port</code> 可自定义代理IP
+    <div class="stats">
+      活跃连接: ${activeConnections}/${config.maxConnections}
     </div>
-
-    <footer>
-      Powered by Cloudflare Workers • 请妥善保管您的UUID
-    </footer>
   </div>
 
   <script>
@@ -548,21 +536,11 @@ function generateHTML(config, host) {
       try {
         const text = document.getElementById(elementId).textContent;
         await navigator.clipboard.writeText(text);
-        
-        const originalText = button.textContent;
         button.textContent = '✓ 已复制';
-        button.classList.add('copied');
-        
-        setTimeout(() => {
-          button.textContent = originalText;
-          button.classList.remove('copied');
-        }, 2000);
+        setTimeout(() => button.textContent = '复制', 2000);
       } catch (err) {
-        console.error('复制失败:', err);
         button.textContent = '复制失败';
-        setTimeout(() => {
-          button.textContent = '复制';
-        }, 2000);
+        setTimeout(() => button.textContent = '复制', 2000);
       }
     }
   </script>
@@ -615,54 +593,8 @@ export default {
 
     } catch (err) {
       console.error('Worker error:', err);
-      return new Response(`Internal Error: ${err.message}`, { status: 500 });
+      return new Response('Internal Server Error', { status: 500 });
     }
   }
 };
-
-// ==================== Durable Object（可选全局限流）====================
-export class ConnectionLimiter {
-  constructor(state, env) {
-    this.state = state;
-    this.maxConnections = Number(env.MAX_GLOBAL_CONNECTIONS) || 100;
-    this.currentCount = 0;
-    this.initialized = false;
-  }
-
-  async init() {
-    if (this.initialized) return;
-    const stored = await this.state.storage.get('connectionCount');
-    this.currentCount = Number(stored) || 0;
-    this.initialized = true;
-  }
-
-  async fetch(request) {
-    await this.init();
-    const url = new URL(request.url);
-    
-    if (request.method === 'POST' && url.pathname === '/acquire') {
-      if (this.currentCount < this.maxConnections) {
-        this.currentCount++;
-        await this.state.storage.put('connectionCount', this.currentCount);
-        return Response.json({ success: true, count: this.currentCount });
-      }
-      return Response.json({ success: false, reason: 'limit_exceeded' }, { status: 429 });
-    }
-    
-    if (request.method === 'POST' && url.pathname === '/release') {
-      this.currentCount = Math.max(0, this.currentCount - 1);
-      await this.state.storage.put('connectionCount', this.currentCount);
-      return Response.json({ success: true, count: this.currentCount });
-    }
-    
-    if (request.method === 'GET' && url.pathname === '/status') {
-      return Response.json({ 
-        current: this.currentCount, 
-        max: this.maxConnections 
-      });
-    }
-
-    return new Response('Not Found', { status: 404 });
-  }
-}
 
