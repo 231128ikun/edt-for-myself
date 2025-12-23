@@ -10,7 +10,7 @@
 */
 import { connect as c } from 'cloudflare:sockets';
 
-const VER = 'mini-2.6.8-final';//版本号,无实际意义
+const VER = 'mini-2.6.9-final';//版本号,无实际意义
 const U = 'aaa6b096-1165-4bbe-935c-99f4ec902d02';//标准的uuid格式
 const P = 'sjc.o00o.ooo:443';//proxyip,用于访问cf类受限网络时fallback
 const S5 = '';//格式为socks5://user:pass@host:port或者http://...设计目的与p类似
@@ -20,9 +20,9 @@ const uid = 'ikun';//订阅连接的路径标识
 const WS_OPEN=1,WS_CLOSED=3;
 const DEBUG = false; 
 const EMPTY_U8 = new Uint8Array(0);
-const UB = Uint8Array.from(U.replace(/-/g, '').match(/.{2}/g).map(x => parseInt(x, 16)));
-function vU(u){return/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(u);}
-if(!vU(U))throw new Error('Bad UUID');
+const UUID_RE=/^([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+if(!UUID_RE.test(U))throw new Error('Bad UUID');
+const UB=Uint8Array.from(U.replace(/-/g,'').toLowerCase().match(/.{2}/g).map(x=>parseInt(x,16)));
 
 export default{
 async fetch(r){
@@ -52,20 +52,20 @@ function isClosedError(e){return e&&/closed|aborted/i.test(e.message);}
 async function vWS(r,px,s5,gs5){
 const wp=new WebSocketPair(),cl=wp[0],sv=wp[1];sv.accept();
 const eh=r.headers.get('sec-websocket-protocol')||'',rs=mRS(sv,eh);
-let remoteSocket=null,dnsWriter=null,dnsMode=false;
+let remoteSocket=null,remoteWriter=null,dnsWriter=null,dnsMode=false;
 const clean=()=>{safeClose(sv);safeClose(remoteSocket);};
 rs.pipeTo(new WritableStream({
 async write(ch){
 try{
   const d=ensureU8(ch);if(!d.length)return;
   if(dnsMode&&dnsWriter){dnsWriter(d);return;}
-  if(remoteSocket){const w=remoteSocket.writable.getWriter();try{await w.write(d);}finally{w.releaseLock();}return;}
+  if(remoteWriter){await remoteWriter.write(d);return;}
   const p=pVH(d.buffer);
   if(p.err){log('[vWS parse error]',p.msg);clean();return;}
   const{ar,pr,ri,vv,udp}=p;
   if(udp){if(pr!==53){log('[udp] only port 53');clean();return;}dnsMode=true;const vh=new Uint8Array([vv[0],0]),ip=d.slice(ri),h=await hUDP(sv,vh);dnsWriter=h.write;if(ip.length)dnsWriter(ip);return;}
   const vh=new Uint8Array([vv[0],0]),ip=d.slice(ri);
-  hTCP(ar,pr,ip,sv,vh,px,s5,gs5).then(s=>remoteSocket=s).catch(e=>{if(!isClosedError(e)){log('[hTCP error]',e);clean();}});
+  hTCP(ar,pr,ip,sv,vh,px,s5,gs5).then(s=>{remoteSocket=s;remoteWriter=remoteSocket.writable.getWriter();}).catch(e=>{if(!isClosedError(e)){log('[hTCP error]',e);clean();}});
 }catch(e){log('[ws write error]',e);clean();}
 },
 close(){clean();},
@@ -189,32 +189,13 @@ return s;
 }
 
 async function hUDP(sv,vh){
-let sentHeader=false;
-const transformStream=new TransformStream({
-start(controller){},
-transform(chunk,controller){
-const data=ensureU8(chunk);
-for(let index=0;index<data.byteLength;){
-if(index+2>data.byteLength)break;
-const lengthBuffer=data.slice(index,index+2);
-const udpPacketLength=new DataView(lengthBuffer.buffer,lengthBuffer.byteOffset,2).getUint16(0);
-if(index+2+udpPacketLength>data.byteLength)break;
-const udpData=data.slice(index+2,index+2+udpPacketLength);
-index=index+2+udpPacketLength;
-controller.enqueue(udpData);
-}
-},
-flush(controller){}
-});
-transformStream.readable.pipeTo(new WritableStream({
-async write(chunk){
-try{
-const dnsQuery=ensureU8(chunk);if(!dnsQuery||dnsQuery.length===0)return;
-const resp=await fetch('https://1.1.1.1/dns-query',{method:'POST',headers:{'content-type':'application/dns-message'},body:dnsQuery});
-const dnsResult=new Uint8Array(await resp.arrayBuffer());
+let sentHeader=false,cache=new Uint8Array(0);
+
+async function sendBack(dnsResult){
 const udpSize=dnsResult.byteLength;
 const udpSizeBuffer=new Uint8Array([(udpSize>>8)&0xff,udpSize&0xff]);
-if(sv.readyState===WS_OPEN){
+if(sv.readyState!==WS_OPEN)return;
+
 if(sentHeader){
 const merged=new Uint8Array(udpSizeBuffer.length+dnsResult.length);
 merged.set(udpSizeBuffer,0);
@@ -229,14 +210,34 @@ sv.send(merged);
 sentHeader=true;
 }
 }
-}catch(e){if(!isClosedError(e)){log('[dns query error]',e);}}
-},
-close(){},
-abort(){}
-})).catch(e=>{if(!isClosedError(e)){log('[dns udp error]',e);}});
-const writer=transformStream.writable.getWriter();
-return{write:async(ch)=>{try{await writer.write(ch);}catch(e){if(!isClosedError(e)){log('[dns write error]',e);}}}};
+
+async function feed(chunk){
+const data=ensureU8(chunk);if(!data.length)return;
+
+if(!cache.length)cache=data;
+else{const nb=new Uint8Array(cache.length+data.length);nb.set(cache,0);nb.set(data,cache.length);cache=nb;}
+
+for(;;){
+if(cache.length<2)break;
+const len=(cache[0]<<8)|cache[1];
+if(len<=0){cache=cache.slice(2);continue;}
+if(cache.length<2+len)break;
+
+const dnsQuery=cache.slice(2,2+len);
+cache=cache.slice(2+len);
+
+try{
+const resp=await fetch('https://1.1.1.1/dns-query',{method:'POST',headers:{'content-type':'application/dns-message'},body:dnsQuery});
+await sendBack(new Uint8Array(await resp.arrayBuffer()));
+}catch(e){if(!isClosedError(e)){log('[dns udp error]',e);}}
 }
+
+if(cache.length>65537)cache=EMPTY_U8;
+}
+
+return{write:feed};
+}
+
 
 function pVH(b){
 if(!b||b.byteLength<24)return{err:1,msg:'invalid header length'};
@@ -274,7 +275,6 @@ ws.addEventListener('error',e=>{try{c.error(e);}catch{}});
 const{ed,er}=base64ToUint8(eh);
 if(er){
 log('[protocol header decode error]',er);
-c.error(er);
 }else if(ed){
 c.enqueue(ed);
 }
@@ -282,3 +282,4 @@ c.enqueue(ed);
 cancel(){closed=true;safeClose(ws);}
 });
 }
+
