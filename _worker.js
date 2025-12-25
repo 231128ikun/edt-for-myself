@@ -85,12 +85,12 @@ rs.pipeTo(new WritableStream({
 async write(ch){
 try{
   const d=ensureU8(ch);if(!d.length)return;
-  if(dnsMode&&dnsWriter){dnsWriter(d);return;}
+  if(dnsMode&&dnsWriter){await dnsWriter(d);return;}
   if(remoteSocket){const w=remoteSocket.writable.getWriter();try{await w.write(d);}finally{w.releaseLock();}return;}
   const p=pVH(d.buffer);
   if(p.err){log('[vWS parse error]',p.msg);clean();return;}
   const{ar,pr,ri,vv,udp}=p;
-  if(udp){if(pr!==53){log('[udp] only port 53');clean();return;}dnsMode=true;const vh=new Uint8Array([vv[0],0]),ip=d.slice(ri),h=await hUDP(sv,vh);dnsWriter=h.write;if(ip.length)dnsWriter(ip);return;}
+  if(udp){if(pr!==53){log('[udp] only port 53');clean();return;}dnsMode=true;const vh=new Uint8Array([vv[0],0]),ip=d.slice(ri),h=await hUDP(sv,vh);dnsWriter=h.write.bind(h);if(ip.length)await dnsWriter(ip);return;}
   const vh=new Uint8Array([vv[0],0]),ip=d.slice(ri);
   hTCP(ar,pr,ip,sv,vh,px,s5,gs5).then(s=>remoteSocket=s).catch(e=>{if(!isClosedError(e)){log('[hTCP error]',e);clean();}});
 }catch(e){log('[ws write error]',e);clean();}
