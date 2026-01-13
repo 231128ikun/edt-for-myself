@@ -15,7 +15,7 @@ const U = 'aaa6b096-1165-4bbe-935c-99f4ec902d02';//标准的uuid格式
 const P = 'sjc.o00o.ooo:443';//proxyip,用于访问cf类受限网络时fallback
 const S5 = '';//格式为socks5://user:pass@host:port或者http://...设计目的与p类似
 const GS5 = false;//全局socks5/http,固定ip用
-const sub = 'sub.o0w0o.qzz.io';//订阅服务器地址,项目为CM独家订阅器项目
+const sub = 'sub.glimmer.hidns.vip';//订阅服务器地址,项目为CM独家订阅器项目
 const uid = 'ikun';//订阅连接的路径标识
 const WS_OPEN=1,WS_CLOSED=3;
 const DEBUG = false; 
