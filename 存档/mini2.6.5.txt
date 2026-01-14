@@ -1,13 +1,3 @@
-/*
-  一、订阅链接：https://<部署的域名>/<变量uid的值(见下方)>(也可以通过?sub=sub.cmliussss.net快速切换订阅器）
-  二、手搓节点格式：
-        vless://@<优选域名或ip>:<端口>?encryption=none&security=tls&sni=<部署的域名>&&type=ws&host=<部署的域名>&path=<路径，例：/?ed=2560或者单独的/>#<备注>
-  三、路径设置格式
-    /?p= 或者/p=；变量支持：s5，gs5，p，连接符：&  即/p=1.2.3.4:443&s5=socks://user:pass@host:port
-  四、连接逻辑
-   1. 直连--> s5(如果有） --> p
-   2. 全局：所有流量转发s5（也就是固定节点）
-*/
 import { connect as c } from 'cloudflare:sockets';
 
 const VER = 'mini-2.6.5-final';//版本号仅做标记，无实际作用
@@ -165,3 +155,4 @@ const{ed}=base64ToUint8(eh);if(ed)c.enqueue(ed);
 });
 
 }
+
