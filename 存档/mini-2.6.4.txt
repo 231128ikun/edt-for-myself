@@ -1,7 +1,7 @@
 /*
   一、订阅链接：https://<部署的域名>/<变量uid的值>(也可以通过?sub=sub.cmliussss.net快速切换订阅器）
   二、手搓节点格式：
-        vless://@<优选域名或ip>:<端口>?encryption=none&security=tls&sni=<部署的域名>&allowInsecure=1&&type=ws&host=<部署的域名>&path=<路径，例：/?ed=2560或者单独的/>#<备注>
+        vless://@<优选域名或ip>:<端口>?encryption=none&security=tls&sni=<部署的域名>&&type=ws&host=<部署的域名>&path=<路径，例：/?ed=2560或者单独的/>#<备注>
   三、路径设置格式
     /?p= 或者/p=；变量支持：s5，gs5，p，连接符：&  即/p=1.2.3.4:443&s5=socks://user:pass@host:port
   四、连接逻辑
@@ -15,7 +15,7 @@ const U = 'aaa6b096-1165-4bbe-935c-99f4ec902d02';//uuid
 const P = 'sjc.o00o.ooo:443';//proxyip，用于访问cf类受限网络时fallback
 const S5 = '';//格式为user:pass@host:port设计目的与p类似
 const GS5 = false;//全局socks5，固定ip用
-const sub = 'sub.o0w0o.qzz.io';//订阅服务器地址，项目为CM独家订阅器项目
+const sub = 'sub.glimmer.hidns.vip';//订阅服务器地址，项目为CM独家订阅器项目
 const uid = 'ikun';//订阅连接的路径标识
 let mode = 1;//传输模式：1=管道传输（理论上低延迟高速度），2=队列传输（理论上应对高并发更稳）
 const BUFFER_THRESHOLD = 256 * 1024;//背压参数，单位为字节
@@ -373,4 +373,5 @@ function pHP(s, defp = 443) {
   const parts = s.split(':');
   if (parts.length === 2) return [parts[0], Number(parts[1]) || defp];
   return [s, defp];
+
 }
