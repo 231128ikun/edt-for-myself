@@ -8,7 +8,7 @@ const GS5 = false;//全局socks5/http,固定ip用
 const sub = 'sub.glimmer.hidns.vip';//订阅服务器地址,项目为CM独家订阅器项目
 const uid = 'ikun';//订阅连接的路径标识
 const WS_OPEN=1,WS_CLOSED=3;
-const DEBUG = false; 
+const DEBUG = false;
 const EMPTY_U8 = new Uint8Array(0);
 const TE=new TextEncoder(),TD=new TextDecoder();
 const UB = Uint8Array.from(U.replace(/-/g, '').match(/.{2}/g).map(x => parseInt(x, 16)));
@@ -21,22 +21,41 @@ try{
   const u=new URL(r.url);
   if(uid&&u.pathname==='/'+uid){const sh=u.searchParams.get('sub')||sub;if(sh)return Response.redirect(`https://${sh}/sub?uuid=${U}&host=${u.hostname}`,302);}
   const up=r.headers.get('Upgrade');
-  if(!up||up.toLowerCase()!=='websocket')return new Response('OK', {status: 200});
+  if(!up||up.toLowerCase()!=='websocket')return new Response('OK', {status:200});
   
   const tp=u.pathname+u.search,pm=tp.match(/p=([^&]*)/),sm=tp.match(/s5=([^&]*)/),gm=tp.match(/gs5=([^&]*)/);
   const px=pm?pm[1]:P,s5=sm?sm[1]:S5,gs5=gm?(gm[1]==='1'||gm[1]&&gm[1].toLowerCase()==='true'):GS5;
   
   return vWS(r,px,s5,gs5);
 }catch(e){
-  console.error('[top-level fetch error]', e?.stack || e?.message || e);
-  return new Response('Worker error: ' + (e?.message || 'unknown'), { status: 502 });
+  console.error('[top-level fetch error]', e?.stack||e?.message||e);
+  return new Response('Worker error: '+(e?.message||'unknown'), {status:502});
 }
 }};
 
 function log(...args){if(DEBUG)console.error(...args);}
-function safeClose(o){try{if(o&&typeof o.close==='function'){if(o.readyState!==undefined&&o.readyState===WS_CLOSED)return;o.close();}}catch(e){log('[safeClose]',e);}}
-function ensureU8(x){if(!x)return EMPTY_U8;if(x instanceof Uint8Array)return x;if(x instanceof ArrayBuffer)return new Uint8Array(x);if(ArrayBuffer.isView(x))return new Uint8Array(x.buffer,x.byteOffset,x.byteLength);return EMPTY_U8;}
-function base64ToUint8(b){if(!b)return{ed:null,er:null};try{let s=b.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';const r=atob(s);return{ed:Uint8Array.from(r,c=>c.charCodeAt(0)),er:null};}catch(e){log('[base64 decode error]',e);return{ed:null,er:e};}}
+function safeClose(o){
+  try{if(o&&typeof o.close==='function'){if(o.readyState!==undefined&&o.readyState===WS_CLOSED)return;o.close();}}catch(e){log('[safeClose]',e);}
+}
+function ensureU8(x){
+  if(!x)return EMPTY_U8;
+  if(x instanceof Uint8Array)return x;
+  if(x instanceof ArrayBuffer)return new Uint8Array(x);
+  if(ArrayBuffer.isView(x))return new Uint8Array(x.buffer,x.byteOffset,x.byteLength);
+  return EMPTY_U8;
+}
+function base64ToUint8(b){
+  if(!b)return{ed:null,er:null};
+  try{
+    let s=b.replace(/-/g,'+').replace(/_/g,'/');
+    while(s.length%4)s+='=';
+    const r=atob(s);
+    return{ed:Uint8Array.from(r,c=>c.charCodeAt(0)),er:null};
+  }catch(e){
+    log('[base64 decode error]',e);
+    return{ed:null,er:e};
+  }
+}
 function parseHostPort(s,d=443){
   if(!s)return[null,d];s=String(s).trim();
   if(s[0]==='['){
@@ -105,7 +124,6 @@ async function hTCP(a,p,fp,sv,vh,px,s5,gs5){
   }catch(e){try{sock?.close();}catch{};sock=await wFirst(await fb(),fp);r2w(sock,sv,vh,null);return sock;}
 }
 
-
 async function r2w(rs,sv,vh,retryFn){
 let header=vh,got=false;
 const retry=async(e)=>{
@@ -129,7 +147,6 @@ try{
 }
 }
 
-
 async function httpConn(h,pt,cfg){
 const s=c({hostname:cfg.h,port:cfg.pt});await s.opened;
 const hh=h.includes(':')?`[${h}]`:h;
@@ -149,7 +166,6 @@ while(true){
   }
 }
 }
-
 
 async function s5conn(h,pt,cfg){
 const s=c({hostname:cfg.h,port:cfg.pt});let sw=null,sr=null;
@@ -177,7 +193,6 @@ try{
   throw e;
 }
 }
-
 
 async function hUDP(sv,vh){
 let sent=false,cache=EMPTY_U8;
@@ -212,7 +227,6 @@ ts.readable.pipeTo(new WritableStream({
 })).catch(e=>{if(!isClosedError(e))log('[dns udp error]',e);});
 return ts.writable.getWriter();
 }
-
 
 function pVH(b){
 if(!b||b.byteLength<24)return{err:1,msg:'invalid header length'};
