@@ -276,7 +276,7 @@ function parseVless(b){
     if(len>253||addrIdx+len>b.byteLength)return null;
     addr=TD.decode(b.slice(addrIdx,addrIdx+len));
     addrIdx+=len;
-  }else if(atyp===4){
+  }else if(atyp===3){
     if(addrIdx+16>b.byteLength)return null;
     const dv=new DataView(b,addrIdx,16),segs=[];
     for(let i=0;i<8;i++)segs.push(dv.getUint16(i*2).toString(16));
