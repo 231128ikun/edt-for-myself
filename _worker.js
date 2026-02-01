@@ -6,15 +6,15 @@
 */
 import{connect as C}from'cloudflare:sockets';
 
-const V='3.0.0';
-const U='aaa6b096-1165-4bbe-935c-99f4ec902d02';
-const P='sjc.o00o.ooo:443';
-const S5='';
-const GS5=false;
-const SUB='sub.glimmer.hidns.vip';
-const UID='ikun';
-const TO=12000;
-const CACHE_TTL=300000;
+const V='3.0.1';                                //版本标识 (修复ATYP bug)
+const U='aaa6b096-1165-4bbe-935c-99f4ec902d02'; //UUID
+const P='sjc.o00o.ooo:443';                     //proxyip fallback
+const S5='';                                    //socks5代理地址/兼容http代理地址
+const GS5=false;                                //全局模式socks5
+const SUB='sub.glimmer.hidns.vip';              //订阅器域名
+const UID='ikun';                               //订阅链接路径标识
+const TO=12000;                                 //超时设置(ms)
+const CACHE_TTL=300000;                         //TXT记录缓存时间(ms)
 
 const WS_OPEN=1,E8=new Uint8Array(0),TE=new TextEncoder(),TD=new TextDecoder();
 const UB=Uint8Array.from(U.replace(/-/g,'').match(/.{2}/g).map(x=>parseInt(x,16)));
