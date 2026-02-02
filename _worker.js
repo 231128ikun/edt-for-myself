@@ -6,7 +6,7 @@
 */
 import{connect as C}from'cloudflare:sockets';
 
-const V='3.0.1';
+const V='3.0.2';
 const U='aaa6b096-1165-4bbe-935c-99f4ec902d02';
 const P='sjc.o00o.ooo:443';
 const S5='';
@@ -14,10 +14,13 @@ const GS5=false;
 const SUB='sub.glimmer.hidns.vip';
 const UID='ikun';
 const TO=12000;
+const CACHE_TTL=300000;
+const CACHE_MAX_SIZE=100;
 
 const WS_OPEN=1,E8=new Uint8Array(0),TE=new TextEncoder(),TD=new TextDecoder();
 const UB=Uint8Array.from(U.replace(/-/g,'').match(/.{2}/g).map(x=>parseInt(x,16)));
 const RE={P:/p=([^&]*)/,S5:/s5=([^&]*)/,GS5:/gs5=([^&]*)/};
+const TC=new Map();
 
 if(!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(U))throw new Error('Invalid UUID');
 
@@ -45,16 +48,21 @@ const v6Bytes=s=>{if(!s||s.includes('.'))return null;const p=s.split('::');if(p.
 const s5Addr=h=>{if(isV4(h))return new Uint8Array([1,...h.split('.').map(Number)]);const v6=v6Bytes(h);if(v6){const o=new Uint8Array(17);o[0]=4;o.set(v6,1);return o;}const d=TE.encode(h);if(d.length>255)throw new Error('Domain too long');const o=new Uint8Array(2+d.length);o[0]=3;o[1]=d.length;o.set(d,2);return o;};
 const rand=a=>a[Math.floor(Math.random()*a.length)];
 
+function cleanCache(){if(TC.size<=CACHE_MAX_SIZE)return;const entries=[...TC.entries()].sort((a,b)=>a[1].exp-b[1].exp);const toDelete=entries.slice(0,TC.size-CACHE_MAX_SIZE);toDelete.forEach(([key])=>TC.delete(key));}
+
 async function queryTXT(d){
   try{const r=await race(fetch(`https://1.1.1.1/dns-query?name=${encodeURIComponent(d)}&type=TXT`,{headers:{accept:'application/dns-json'}}),TO);if(!r.ok)return null;const j=await r.json();return j.Answer?.filter(x=>x.type===16).map(x=>x.data)||[];}catch{return null;}
 }
 
 async function parseTXT(d){
+  const cached=TC.get(d);if(cached&&Date.now()<cached.exp)return cached.v;
   const recs=await queryTXT(d);if(!recs?.length)return null;let data=recs[0];
   if(data.startsWith('"')&&data.endsWith('"'))data=data.slice(1,-1);
   const list=data.replace(/\\010/g,',').replace(/\n/g,',').split(',').map(s=>s.trim()).filter(Boolean);
   const parsed=list.map(s=>{const[h,p]=parseHP(s,443);return h?{h,p}:null;}).filter(Boolean);
-  return parsed.length?parsed:null;
+  if(!parsed.length)return null;
+  TC.set(d,{v:parsed,exp:Date.now()+CACHE_TTL});cleanCache();
+  return parsed;
 }
 
 async function handleWS(r,px,s5,gs5){
