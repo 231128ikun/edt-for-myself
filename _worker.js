@@ -1,21 +1,18 @@
 /*
-  订阅链接: https://<域名>/<uid>?sub=<订阅器域名>
-  节点格式: vless://@<IP>:<端口>?encryption=none&security=tls&sni=<域名>&type=ws&host=<域名>&path=/?ed=2560#<备注>
-  路径参数: /?p=1.2.3.4:443&s5=socks5://user:pass@host:port&gs5=1
-  连接逻辑: 直连 -> socks5(可选) -> proxyip(fallback) | 全局模式: 所有流量经socks5
+ 本项目仅作为学习使用，请勿用于非法用途。
 */
 import{connect as C}from'cloudflare:sockets';
 
 const V='3.0.2';
 const U='aaa6b096-1165-4bbe-935c-99f4ec902d02';
-const P='sjc.o00o.ooo:443';
+const P='kr.dwb.cc.cd:50001';
 const S5='';
 const GS5=false;
 const SUB='sub.glimmer.hidns.vip';
 const UID='ikun';
 const TO=12000;
-const CACHE_TTL=300000;
-const CACHE_MAX_SIZE=100;
+const CACHE_TTL=600000;   // TXT记录缓存时间(ms)-10分钟
+const CACHE_MAX_SIZE=50;  // 缓存最大条目数
 
 const WS_OPEN=1,E8=new Uint8Array(0),TE=new TextEncoder(),TD=new TextDecoder();
 const UB=Uint8Array.from(U.replace(/-/g,'').match(/.{2}/g).map(x=>parseInt(x,16)));
