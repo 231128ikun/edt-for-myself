@@ -48,7 +48,7 @@ const rn=a=>a[Math.floor(Math.random()*a.length)];
 function cC(){if(TC.size<=CM)return;const entries=[...TC.entries()].sort((a,b)=>a[1].exp-b[1].exp);const toDelete=entries.slice(0,TC.size-CM);toDelete.forEach(([key])=>TC.delete(key));}
 
 async function qT(d){
-  try{const r=await rc(fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(d)}&type=TXT`,{headers:{accept:'application/dns-json'}}),TO);if(!r.ok)return null;const j=await r.json();return j.Answer?.filter(x=>x.type===16).map(x=>x.data)||[];}catch{return null;}
+  try{const r=await rc(fetch(`https://dns.google/resolve?name=${encodeURIComponent(d)}&type=TXT`),TO);if(!r.ok)return null;const j=await r.json();return j.Answer?.filter(x=>x.type===16).map(x=>x.data)||[];}catch{return null;}
 }
 
 async function pT(d){
@@ -141,7 +141,7 @@ async function sC(h,pt,cfg){
 async function hU(ws,vh){
   let sent=false,cache=E8;
   const ts=new TransformStream({transform(chunk,ctl){let d=u8(chunk);if(cache.length){const m=new Uint8Array(cache.length+d.length);m.set(cache);m.set(d,cache.length);d=m;cache=E8;}for(let i=0;i+2<=d.length;){const l=(d[i]<<8)|d[i+1];if(i+2+l>d.length){cache=d.slice(i);break;}ctl.enqueue(d.slice(i+2,i+2+l));i+=2+l;}if(cache.length>4096)cache=E8;}});
-  ts.readable.pipeTo(new WritableStream({async write(udp){try{const ac=new AbortController(),tid=setTimeout(()=>ac.abort(),TO);const resp=await fetch('https://1.1.1.1/dns-query',{method:'POST',headers:{'content-type':'application/dns-message'},body:udp,signal:ac.signal});clearTimeout(tid);const res=new Uint8Array(await resp.arrayBuffer()),len=new Uint8Array([res.length>>8,res.length&255]);if(!sent){const m=new Uint8Array(vh.length+2+res.length);m.set(vh);m.set(len,vh.length);m.set(res,vh.length+2);ws.send(m);sent=true;}else{const m=new Uint8Array(2+res.length);m.set(len);m.set(res,2);ws.send(m);}}catch{}}})).catch(()=>{});
+  ts.readable.pipeTo(new WritableStream({async write(udp){try{const ac=new AbortController(),tid=setTimeout(()=>ac.abort(),TO);const resp=await fetch('https://dns.google/dns-query',{method:'POST',headers:{'content-type':'application/dns-message'},body:udp,signal:ac.signal});clearTimeout(tid);const res=new Uint8Array(await resp.arrayBuffer()),len=new Uint8Array([res.length>>8,res.length&255]);if(!sent){const m=new Uint8Array(vh.length+2+res.length);m.set(vh);m.set(len,vh.length);m.set(res,vh.length+2);ws.send(m);sent=true;}else{const m=new Uint8Array(2+res.length);m.set(len);m.set(res,2);ws.send(m);}}catch{}}})).catch(()=>{});
   return ts.writable.getWriter();
 }
 
