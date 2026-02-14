@@ -48,7 +48,7 @@ const rn=a=>a[Math.floor(Math.random()*a.length)];
 function cC(){if(TC.size<=CM)return;const entries=[...TC.entries()].sort((a,b)=>a[1].exp-b[1].exp);const toDelete=entries.slice(0,TC.size-CM);toDelete.forEach(([key])=>TC.delete(key));}
 
 async function qT(d){
-  try{const r=await rc(fetch(`https://1.1.1.1/dns-query?name=${encodeURIComponent(d)}&type=TXT`,{headers:{accept:'application/dns-json'}}),TO);if(!r.ok)return null;const j=await r.json();return j.Answer?.filter(x=>x.type===16).map(x=>x.data)||[];}catch{return null;}
+  try{const r=await rc(fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(d)}&type=TXT`,{headers:{accept:'application/dns-json'}}),TO);if(!r.ok)return null;const j=await r.json();return j.Answer?.filter(x=>x.type===16).map(x=>x.data)||[];}catch{return null;}
 }
 
 async function pT(d){
