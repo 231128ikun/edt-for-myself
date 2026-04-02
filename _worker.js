@@ -3,7 +3,7 @@
 */
 import{connect as C}from'cloudflare:sockets';
 
-const V='3.0.3';
+const V='3.0.4';
 const U='aaa6b096-1165-4bbe-935c-99f4ec902d02';
 const P='kr.dwb.cc.cd:50001';
 const S5='';
@@ -28,7 +28,7 @@ export default{async fetch(r){
       const s=u.searchParams.get('sub')||SUB;
       return s?Response.redirect(`https://${s}/sub?uuid=${U}&host=${u.hostname}`,302):new Response('Missing sub param',{status:400});
     }
-    if(r.headers.get('Upgrade')?.toLowerCase()!=='websocket')return new Response('OK',{status:200});
+    if(r.headers.get('Upgrade')?.toLowerCase()!=='websocket')return new Response('mini v'+V,{status:200});
     const tp=u.pathname+u.search,px=tp.match(RE.P)?.[1]||P,s5=tp.match(RE.S5)?.[1]||S5;
     const gm=tp.match(RE.GS5),gs5=gm?(gm[1]==='1'||gm[1]?.toLowerCase()==='true'):GS5;
     return hW(r,px,s5,gs5);
@@ -63,7 +63,9 @@ async function pT(d){
 }
 
 async function hW(r,px,s5,gs5){
-  const[client,server]=Object.values(new WebSocketPair());server.accept();
+  const[client,server]=Object.values(new WebSocketPair());
+  server.accept();
+  server.binaryType='arraybuffer';
   const eh=r.headers.get('sec-websocket-protocol')||'',rs=mR(server,eh);
   let remote=null,dnsW=null,dns=false,busy=false;
   const clean=()=>{dnsW=null;dns=false;cl(remote);cl(server);};
