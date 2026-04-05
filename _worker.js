@@ -3,9 +3,9 @@
 */
 import{connect as C}from'cloudflare:sockets';
 
-const V='3.0.4';
+const V='3.0.5';
 const U='aaa6b096-1165-4bbe-935c-99f4ec902d02';
-const P='kr.dwb.cc.cd:50001';
+const P='txt@kr.william.dwb.cc.cd';
 const S5='';
 const GS5=false;
 const SUB='sub.glimmer.hidns.vip';
@@ -36,7 +36,8 @@ export default{async fetch(r){
 }};
 
 const cl=o=>{try{o?.close?.()}catch{}};
-const rc=(p,ms)=>Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error('timeout')),ms))]);
+const clWS=o=>{try{if(o?.readyState===1||o?.readyState===2)o.close();}catch{}};
+const rc=(p,ms)=>{let t;return Promise.race([p,new Promise((_,r)=>{t=setTimeout(()=>r(new Error('timeout')),ms);})]).finally(()=>clearTimeout(t));};
 const u8=x=>x instanceof Uint8Array?x:x instanceof ArrayBuffer?new Uint8Array(x):ArrayBuffer.isView(x)?new Uint8Array(x.buffer,x.byteOffset,x.byteLength):E8;
 const b64=b=>{if(!b)return null;try{let s=b.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';return Uint8Array.from(atob(s),c=>c.charCodeAt(0));}catch{return null;}};
 const pH=(s,d=443)=>{if(!s)return[null,d];s=String(s).trim();if(s[0]==='['){const j=s.indexOf(']');if(j>0)return[s.slice(1,j),s[j+1]===':'?Number(s.slice(j+2))||d:d];}const i=s.lastIndexOf(':');return i>0&&s.indexOf(':')==i?[s.slice(0,i),Number(s.slice(i+1))||d]:[s,d];};
@@ -67,8 +68,10 @@ async function hW(r,px,s5,gs5){
   server.accept();
   server.binaryType='arraybuffer';
   const eh=r.headers.get('sec-websocket-protocol')||'',rs=mR(server,eh);
+  let addr='',portLog='';
+  const log=(info,ev)=>console.log(`[${addr}:${portLog}] ${info}`,ev||'');
   let remote=null,dnsW=null,dns=false,busy=false;
-  const clean=()=>{dnsW=null;dns=false;cl(remote);cl(server);};
+  const clean=()=>{dnsW=null;dns=false;cl(remote);clWS(server);};
   rs.pipeTo(new WritableStream({
     async write(ch){
       try{
@@ -77,12 +80,23 @@ async function hW(r,px,s5,gs5){
         if(remote){const w=remote.writable.getWriter();try{await w.write(d);}finally{w.releaseLock();}return;}
         if(busy)return;busy=true;
         const p=pV(d.buffer);if(!p)return clean();
-        const{addr,port,idx,ver,isUDP}=p,vh=new Uint8Array([ver,0]),payload=d.slice(idx);
-        if(isUDP){if(port!==53)return clean();dns=true;const h=await hU(server,vh);dnsW=h.write.bind(h);if(payload.length)await dnsW(payload);return;}
-        try{remote=await hT(addr,port,payload,server,vh,px,s5,gs5);}catch{clean();}
-      }catch{clean();}
-    },close(){clean();},abort(){clean();}
-  })).catch(()=>clean());
+        const{addr:a,port,idx,ver,isUDP}=p;
+        addr=a;portLog=`${port}--${Math.random()} ${isUDP?'udp ':'tcp '}`;
+        const vh=new Uint8Array([ver,0]),payload=d.slice(idx);
+        if(isUDP){
+          if(port!==53){log('UDP proxy only enable for DNS which is port 53');return clean();}
+          dns=true;
+          const h=await hU(server,vh,log);dnsW=h.write.bind(h);
+          if(payload.length)await dnsW(payload);
+          return;
+        }
+        log(`connected to ${addr}:${port}`);
+        try{remote=await hT(addr,port,payload,server,vh,px,s5,gs5,log);}catch(e){log('hT error',e?.message);clean();}
+      }catch(e){log('write error',e?.message);clean();}
+    },
+    close(){log('readableWebSocketStream is close');clean();},
+    abort(r){log('readableWebSocketStream is abort',JSON.stringify(r));clean();}
+  })).catch(e=>log('pipeTo error',e?.message));
   return new Response(null,{status:101,webSocket:client});
 }
 
@@ -95,25 +109,57 @@ function pF(addr,port,px,s5cfg){
   return()=>{const[ph,pp]=pH(px,port);return dl(ph,pp);};
 }
 
-async function hT(addr,port,data,ws,vh,px,s5,gs5){
+async function hT(addr,port,data,ws,vh,px,s5,gs5,log){
   const s5cfg=s5?pS(s5):null,fb=pF(addr,port,px,s5cfg);let sock=null;
   try{
-    if(gs5&&s5cfg){sock=await wF(await fb(),data);rl(sock,ws,vh,null);return sock;}
+    if(gs5&&s5cfg){sock=await wF(await fb(),data);rl(sock,ws,vh,null,log);return sock;}
     sock=await wF(await dl(addr,port),data);
-    rl(sock,ws,vh,async()=>{try{sock?.close();}catch{};const s=await wF(await fb(),data);rl(s,ws,vh,null);return s;});
+    rl(sock,ws,vh,async()=>{
+      log('retry');
+      try{sock?.close();}catch{}
+      const s=await wF(await fb(),data);
+      rl(s,ws,vh,null,log);
+      return s;
+    },log);
     return sock;
-  }catch{try{sock?.close();}catch{};sock=await wF(await fb(),data);rl(sock,ws,vh,null);return sock;}
+  }catch{
+    try{sock?.close();}catch{}
+    sock=await wF(await fb(),data);
+    rl(sock,ws,vh,null,log);
+    return sock;
+  }
 }
 
-async function rl(rs,ws,vh,retryFn){
-  let hdr=vh,got=false;
-  const retry=async()=>{if(!got&&retryFn&&ws.readyState===WO){try{await retryFn();return 1;}catch{}}return 0;};
+async function rl(rs,ws,vh,retryFn,log){
+  let hdr=vh,hasData=false;
+  const retry=async()=>{
+    if(!hasData&&retryFn&&ws.readyState===WO){
+      try{await retryFn();return 1;}catch{}
+    }
+    return 0;
+  };
   try{
     await rs.readable.pipeTo(new WritableStream({
-      write(ch){got=true;const d=u8(ch);if(!d.length)return;if(ws.readyState!==WO)throw new Error('ws closed');if(hdr){const m=new Uint8Array(hdr.length+d.length);m.set(hdr);m.set(d,hdr.length);ws.send(m);hdr=null;}else ws.send(d);},
-      async close(){if(!await retry())cl(ws);},async abort(){if(!await retry())cl(ws);}
+      write(ch){
+        hasData=true;
+        const d=u8(ch);if(!d.length)return;
+        if(ws.readyState!==WO)throw new Error('ws closed');
+        if(hdr){const m=new Uint8Array(hdr.length+d.length);m.set(hdr);m.set(d,hdr.length);ws.send(m);hdr=null;}
+        else ws.send(d);
+      },
+      async close(){
+        log(`remoteConnection!.readable is close with hasIncomingData is ${hasData}`);
+        if(!await retry())clWS(ws);
+      },
+      async abort(r){
+        console.error('remoteConnection!.readable abort',r);
+        if(!await retry())clWS(ws);
+      }
     }));
-  }catch{if(!await retry())cl(ws);}
+  }catch(e){
+    console.error('remoteSocketToWS has exception',e?.stack||e);
+    if(!await retry())clWS(ws);
+  }
 }
 
 async function hC(h,pt,cfg){
@@ -140,10 +186,27 @@ async function sC(h,pt,cfg){
   }catch(e){try{sr?.releaseLock();}catch{};try{sw?.releaseLock();}catch{};cl(s);throw e;}
 }
 
-async function hU(ws,vh){
+async function hU(ws,vh,log){
   let sent=false,cache=E8;
-  const ts=new TransformStream({transform(chunk,ctl){let d=u8(chunk);if(cache.length){const m=new Uint8Array(cache.length+d.length);m.set(cache);m.set(d,cache.length);d=m;cache=E8;}for(let i=0;i+2<=d.length;){const l=(d[i]<<8)|d[i+1];if(i+2+l>d.length){cache=d.slice(i);break;}ctl.enqueue(d.slice(i+2,i+2+l));i+=2+l;}if(cache.length>4096)cache=E8;}});
-  ts.readable.pipeTo(new WritableStream({async write(udp){try{const ac=new AbortController(),tid=setTimeout(()=>ac.abort(),TO);const resp=await fetch('https://dns.google/dns-query',{method:'POST',headers:{'content-type':'application/dns-message'},body:udp,signal:ac.signal});clearTimeout(tid);const res=new Uint8Array(await resp.arrayBuffer()),len=new Uint8Array([res.length>>8,res.length&255]);if(!sent){const m=new Uint8Array(vh.length+2+res.length);m.set(vh);m.set(len,vh.length);m.set(res,vh.length+2);ws.send(m);sent=true;}else{const m=new Uint8Array(2+res.length);m.set(len);m.set(res,2);ws.send(m);}}catch{}}})).catch(()=>{});
+  const ts=new TransformStream({transform(chunk,ctl){
+    let d=u8(chunk);
+    if(cache.length){const m=new Uint8Array(cache.length+d.length);m.set(cache);m.set(d,cache.length);d=m;cache=E8;}
+    for(let i=0;i+2<=d.length;){const l=(d[i]<<8)|d[i+1];if(i+2+l>d.length){cache=d.slice(i);break;}ctl.enqueue(d.slice(i+2,i+2+l));i+=2+l;}
+    if(cache.length>4096)cache=E8;
+  }});
+  ts.readable.pipeTo(new WritableStream({async write(udp){
+    try{
+      const ac=new AbortController(),tid=setTimeout(()=>ac.abort(),TO);
+      const resp=await fetch('https://dns.google/dns-query',{method:'POST',headers:{'content-type':'application/dns-message'},body:udp,signal:ac.signal});
+      clearTimeout(tid);
+      const res=new Uint8Array(await resp.arrayBuffer()),len=new Uint8Array([res.length>>8,res.length&255]);
+      log(`doh success and dns message length is ${res.length}`);
+      if(ws.readyState===WO){
+        if(!sent){const m=new Uint8Array(vh.length+2+res.length);m.set(vh);m.set(len,vh.length);m.set(res,vh.length+2);ws.send(m);sent=true;}
+        else{const m=new Uint8Array(2+res.length);m.set(len);m.set(res,2);ws.send(m);}
+      }
+    }catch(e){log('dns udp has error'+e);}
+  }})).catch(()=>{});
   return ts.writable.getWriter();
 }
 
@@ -173,7 +236,12 @@ function pS(s){
 function mR(ws,eh){
   let closed=false;
   return new ReadableStream({
-    start(c){ws.addEventListener('message',e=>{if(!closed)c.enqueue(e.data);});ws.addEventListener('close',()=>{if(!closed){closed=true;try{c.close();}catch{}}});ws.addEventListener('error',e=>{try{c.error(e);}catch{}});const d=b64(eh);if(d)c.enqueue(d);},
-    cancel(){closed=true;cl(ws);}
+    start(c){
+      ws.addEventListener('message',e=>{if(!closed)c.enqueue(e.data);});
+      ws.addEventListener('close',()=>{if(!closed){closed=true;try{c.close();}catch{}}});
+      ws.addEventListener('error',e=>{try{c.error(e);}catch{}});
+      const d=b64(eh);if(d)c.enqueue(d);
+    },
+    cancel(){closed=true;clWS(ws);}
   });
 }
