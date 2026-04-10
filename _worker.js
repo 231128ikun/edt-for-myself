@@ -3,7 +3,7 @@
 */
 import{connect as C}from'cloudflare:sockets';
 
-const V='3.0.5';
+const V='3.0.6';
 const U='aaa6b096-1165-4bbe-935c-99f4ec902d02';
 const P='txt@kr.william.dwb.cc.cd';
 const S5='';
@@ -11,8 +11,7 @@ const GS5=false;
 const SUB='sub.glimmer.hidns.vip';
 const UID='ikun';
 const TO=12000;
-const CT=600000;   // TXT记录缓存时间(ms)-10分钟
-const CM=50;  // 缓存最大条目数
+const CT=3*60*60*1000;
 
 const WO=1,E8=new Uint8Array(0),TE=new TextEncoder(),TD=new TextDecoder();
 const UB=Uint8Array.from(U.replace(/-/g,'').match(/.{2}/g).map(x=>parseInt(x,16)));
@@ -23,6 +22,7 @@ if(!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.tes
 
 export default{async fetch(r){
   try{
+    if(/^txt@/i.test(P))pT(P.slice(4)).catch(()=>{});
     const u=new URL(r.url);
     if(UID&&u.pathname==='/'+UID){
       const s=u.searchParams.get('sub')||SUB;
@@ -46,8 +46,6 @@ const vB=s=>{if(!s||s.includes('.'))return null;const p=s.split('::');if(p.lengt
 const sA=h=>{if(iV(h))return new Uint8Array([1,...h.split('.').map(Number)]);const v6=vB(h);if(v6){const o=new Uint8Array(17);o[0]=4;o.set(v6,1);return o;}const d=TE.encode(h);if(d.length>255)throw new Error('Domain too long');const o=new Uint8Array(2+d.length);o[0]=3;o[1]=d.length;o.set(d,2);return o;};
 const rn=a=>a[Math.floor(Math.random()*a.length)];
 
-function cC(){if(TC.size<=CM)return;const entries=[...TC.entries()].sort((a,b)=>a[1].exp-b[1].exp);const toDelete=entries.slice(0,TC.size-CM);toDelete.forEach(([key])=>TC.delete(key));}
-
 async function qT(d){
   try{const r=await rc(fetch(`https://dns.google/resolve?name=${encodeURIComponent(d)}&type=TXT`),TO);if(!r.ok)return null;const j=await r.json();return j.Answer?.filter(x=>x.type===16).map(x=>x.data)||[];}catch{return null;}
 }
@@ -59,7 +57,7 @@ async function pT(d){
   const list=data.replace(/\\010/g,',').replace(/\n/g,',').split(',').map(s=>s.trim()).filter(Boolean);
   const parsed=list.map(s=>{const[h,p]=pH(s,443);return h?{h,p}:null;}).filter(Boolean);
   if(!parsed.length)return null;
-  TC.set(d,{v:parsed,exp:Date.now()+CT});cC();
+  TC.set(d,{v:parsed,exp:Date.now()+CT});
   return parsed;
 }
 
