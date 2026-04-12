@@ -22,8 +22,8 @@ if(!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.tes
 
 export default{async fetch(r){
   try{
-    if(/^txt@/i.test(P))pT(P.slice(4)).catch(()=>{});
     const u=new URL(r.url);
+    if(/^txt@/i.test((u.pathname+u.search).match(RE.P)?.[1]||P))pT(((u.pathname+u.search).match(RE.P)?.[1]||P).slice(4)).catch(e=>console.log(`[pT] warmup failed: ${e?.message}`));
     if(UID&&u.pathname==='/'+UID){
       const s=u.searchParams.get('sub')||SUB;
       return s?Response.redirect(`https://${s}/sub?uuid=${U}&host=${u.hostname}`,302):new Response('Missing sub param',{status:400});
@@ -52,7 +52,7 @@ async function qT(d){
 
 async function pT(d){
   const cached=TC.get(d);if(cached&&Date.now()<cached.exp)return cached.v;
-  const recs=await qT(d);if(!recs?.length)return null;let data=recs[0];
+  const recs=await qT(d);if(!recs?.length){console.log(`[pT] TXT query failed: ${d}`);return null;}let data=recs[0];
   if(data.startsWith('"')&&data.endsWith('"'))data=data.slice(1,-1);
   const list=data.replace(/\\010/g,',').replace(/\n/g,',').split(',').map(s=>s.trim()).filter(Boolean);
   const parsed=list.map(s=>{const[h,p]=pH(s,443);return h?{h,p}:null;}).filter(Boolean);
@@ -120,11 +120,11 @@ async function hT(addr,port,data,ws,vh,px,s5,gs5,log){
       return s;
     },log);
     return sock;
-  }catch{
+  }catch(e){
+    log(`direct failed, fallback to proxy: ${e?.message}`);
     try{sock?.close();}catch{}
-    sock=await wF(await fb(),data);
-    rl(sock,ws,vh,null,log);
-    return sock;
+    try{sock=await wF(await fb(),data);rl(sock,ws,vh,null,log);return sock;}
+    catch(e2){log(`fallback also failed: ${e2?.message}`);throw e2;}
   }
 }
 
