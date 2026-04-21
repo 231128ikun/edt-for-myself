@@ -3,7 +3,7 @@
 */
 import{connect as C}from'cloudflare:sockets';
 
-const V='3.0.7';
+const V='3.0.8';
 const U='aaa6b096-1165-4bbe-935c-99f4ec902d02';
 const P='txt@kr.william.dwb.cc.cd';
 const S5='';
@@ -46,10 +46,13 @@ const vB=s=>{if(!s||s.includes('.'))return null;const p=s.split('::');if(p.lengt
 const bV6=(b,off)=>{const dv=new DataView(b,off,16),segs=[];for(let i=0;i<8;i++)segs.push(dv.getUint16(i*2).toString(16));return segs.join(':');};
 const sA=h=>{if(iV(h))return new Uint8Array([1,...h.split('.').map(Number)]);const v6=vB(h);if(v6){const o=new Uint8Array(17);o[0]=4;o.set(v6,1);return o;}const d=TE.encode(h);if(d.length>255)throw new Error('Domain too long');const o=new Uint8Array(2+d.length);o[0]=3;o[1]=d.length;o.set(d,2);return o;};
 const rn=a=>a[Math.floor(Math.random()*a.length)];
+const cu=(...parts)=>{const list=parts.map(u8),o=new Uint8Array(list.reduce((n,p)=>n+p.length,0));let off=0;for(const p of list){o.set(p,off);off+=p.length;}return o;};
+const isTXT=s=>/^txt@/i.test(s||'');
+const getTXT=s=>isTXT(s)?s.slice(4):'';
+const fTO=async(url,init)=>{let tid;try{const ac=new AbortController();tid=setTimeout(()=>ac.abort(),TO);return await fetch(url,{...(init||{}),signal:ac.signal});}finally{clearTimeout(tid);}};
 
 async function qT(d){
-  let tid;
-  try{const ac=new AbortController();tid=setTimeout(()=>ac.abort(),TO);const r=await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(d)}&type=TXT`,{headers:{accept:'application/dns-json'},signal:ac.signal});if(!r.ok)return null;const j=await r.json();return j.Answer?.filter(x=>x.type===16).map(x=>x.data)||[];}catch{return null;}finally{clearTimeout(tid);}
+  try{const r=await fTO(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(d)}&type=TXT`,{headers:{accept:'application/dns-json'}});if(!r.ok)return null;const j=await r.json();return j.Answer?.filter(x=>x.type===16).map(x=>x.data)||[];}catch{return null;}
 }
 
 async function pT(d){
@@ -71,7 +74,7 @@ async function hW(r,px,s5,gs5){
   const[client,server]=Object.values(new WebSocketPair());
   server.accept();
   server.binaryType='arraybuffer';
-  if(/^txt@/i.test(px))pT(px.slice(4)).catch(e=>console.log(`[pT] warmup failed: ${e?.message}`));
+  if(isTXT(px))pT(getTXT(px)).catch(e=>console.log(`[pT] warmup failed: ${e?.message}`));
   const eh=r.headers.get('sec-websocket-protocol')||'',rs=mR(server,eh);
   let addr='',portLog='';
   const log=(info,ev)=>console.log(`[${addr}:${portLog}] ${info}`,ev||'');
@@ -82,7 +85,7 @@ async function hW(r,px,s5,gs5){
       try{
         const d=u8(ch);if(!d.length)return;
         if(dns&&dnsW){await dnsW(d);return;}
-        if(remote){const w=remote.writable.getWriter();try{await w.write(d);}finally{w.releaseLock();}return;}
+        if(remote){await wF(remote,d);return;}
         if(busy)return;busy=true;
         const p=pV(d.buffer);if(!p)return clean();
         const{addr:a,port,idx,ver,isUDP}=p;
@@ -106,31 +109,33 @@ async function hW(r,px,s5,gs5){
 }
 
 async function dl(h,p){const s=C({hostname:h,port:p});await rc(s.opened,TO);return s;}
+async function oS(cfg){return dl(cfg.h,cfg.pt);}
 async function wF(s,data){if(data?.length){const w=s.writable.getWriter();try{await w.write(data);}finally{w.releaseLock();}}return s;}
+const rL=o=>{try{o?.releaseLock?.()}catch{}};
 
 function pF(addr,port,px,s5cfg){
   if(s5cfg)return()=>s5cfg.isHttp?hC(addr,port,s5cfg):sC(addr,port,s5cfg);
-  if(px&&/^txt@/i.test(px)){return async()=>{const d=px.slice(4),list=await pT(d);if(list?.length){const sel=rn(list);return dl(sel.h,sel.p);}const[ph,pp]=pH(d,port);return dl(ph,pp);};}
+  if(isTXT(px)){return async()=>{const d=getTXT(px),list=await pT(d);if(list?.length){const sel=rn(list);return dl(sel.h,sel.p);}const[ph,pp]=pH(d,port);return dl(ph,pp);};}
   return()=>{const[ph,pp]=pH(px,port);return dl(ph,pp);};
 }
 
 async function hT(addr,port,data,ws,vh,px,s5,gs5,log){
-  const s5cfg=s5?pS(s5):null,fb=pF(addr,port,px,s5cfg);let sock=null;
+  const s5cfg=s5?pS(s5):null,fb=pF(addr,port,px,s5cfg);
+  const cR=(s,retryFn)=>{rl(s,ws,vh,retryFn,log);return s;};
+  const cF=async()=>cR(await wF(await fb(),data),null);
+  let sock=null;
   try{
-    if(gs5&&s5cfg){sock=await wF(await fb(),data);rl(sock,ws,vh,null,log);return sock;}
+    if(gs5&&s5cfg)return cF();
     sock=await wF(await dl(addr,port),data);
-    rl(sock,ws,vh,async()=>{
+    return cR(sock,async()=>{
       log('retry');
-      try{sock?.close();}catch{}
-      const s=await wF(await fb(),data);
-      rl(s,ws,vh,null,log);
-      return s;
-    },log);
-    return sock;
+      cl(sock);
+      return cF();
+    });
   }catch(e){
     log(`direct failed, fallback to proxy: ${e?.message}`);
-    try{sock?.close();}catch{}
-    try{sock=await wF(await fb(),data);rl(sock,ws,vh,null,log);return sock;}
+    cl(sock);
+    try{return await cF();}
     catch(e2){log(`fallback also failed: ${e2?.message}`);throw e2;}
   }
 }
@@ -145,7 +150,7 @@ async function rl(rs,ws,vh,retryFn,log){
         hasData=true;
         const d=u8(ch);if(!d.length)return;
         if(ws.readyState!==WO)throw new Error('ws closed');
-        if(hdr){const m=new Uint8Array(hdr.length+d.length);m.set(hdr);m.set(d,hdr.length);ws.send(m);hdr=null;}
+        if(hdr){ws.send(cu(hdr,d));hdr=null;}
         else ws.send(d);
       },
       close(){log(`remoteConnection!.readable is close with hasIncomingData is ${hasData}`);return onEnd('close');},
@@ -158,30 +163,29 @@ async function rl(rs,ws,vh,retryFn,log){
 }
 
 async function hC(h,pt,cfg){
-  const s=C({hostname:cfg.h,port:cfg.pt});let r=null;
+  const s=await oS(cfg);let r=null;
   try{
-    await rc(s.opened,TO);
     const hh=h.includes(':')?`[${h}]`:h,auth=cfg.u&&cfg.p?`Proxy-Authorization: Basic ${btoa(cfg.u+':'+cfg.p)}\r\n`:'';
     const req=`CONNECT ${hh}:${pt} HTTP/1.1\r\nHost: ${hh}:${pt}\r\n${auth}Connection: Keep-Alive\r\n\r\n`;
-    const w=s.writable.getWriter();await w.write(TE.encode(req));w.releaseLock();
+    await wF(s,TE.encode(req));
     r=s.readable.getReader();let buf=E8;const start=Date.now();
-    while(Date.now()-start<TO){const{value,done}=await rc(r.read(),TO);if(done)throw new Error('Proxy closed');const v=u8(value),nb=new Uint8Array(buf.length+v.length);nb.set(buf);nb.set(v,buf.length);buf=nb;const txt=TD.decode(buf);if(txt.includes('\r\n\r\n')){if(!txt.startsWith('HTTP/1.1 200')&&!txt.startsWith('HTTP/1.0 200'))throw new Error('Connect failed');r.releaseLock();return s;}}
-    r.releaseLock();throw new Error('Timeout');
-  }catch(e){try{r?.releaseLock();}catch{};cl(s);throw e;}
+    while(Date.now()-start<TO){const{value,done}=await rc(r.read(),TO);if(done)throw new Error('Proxy closed');buf=cu(buf,value);const txt=TD.decode(buf);if(txt.includes('\r\n\r\n')){if(!txt.startsWith('HTTP/1.1 200')&&!txt.startsWith('HTTP/1.0 200'))throw new Error('Connect failed');rL(r);return s;}}
+    rL(r);throw new Error('Timeout');
+  }catch(e){rL(r);cl(s);throw e;}
 }
 
 async function sC(h,pt,cfg){
-  const s=C({hostname:cfg.h,port:cfg.pt});let sw=null,sr=null;
+  const s=await oS(cfg);let sw=null,sr=null;
   try{
-    await rc(s.opened,TO);sw=s.writable.getWriter();sr=s.readable.getReader();
+    sw=s.writable.getWriter();sr=s.readable.getReader();
     await sw.write(new Uint8Array([5,2,0,2]));let r=await rc(sr.read(),TO);
     if(!r?.value||r.done)throw new Error('No auth response');
     if(r.value[1]===0xFF)throw new Error('No acceptable auth method');
     if(r.value[1]===2){if(!cfg.u||!cfg.p)throw new Error('Auth required');const uE=TE.encode(cfg.u),pE=TE.encode(cfg.p);await sw.write(new Uint8Array([1,uE.length,...uE,pE.length,...pE]));r=await rc(sr.read(),TO);if(!r?.value||r.done||r.value[1]!==0)throw new Error('Auth failed');}
     const addr=sA(h),req=new Uint8Array(3+addr.length+2);req[0]=5;req[1]=1;req[2]=0;req.set(addr,3);req[3+addr.length]=pt>>8;req[4+addr.length]=pt&255;await sw.write(req);
     r=await rc(sr.read(),TO);if(!r?.value||r.done||r.value[1]!==0)throw new Error('Connect failed');
-    sr.releaseLock();sw.releaseLock();return s;
-  }catch(e){try{sr?.releaseLock();}catch{};try{sw?.releaseLock();}catch{};cl(s);throw e;}
+    rL(sr);rL(sw);return s;
+  }catch(e){rL(sr);rL(sw);cl(s);throw e;}
 }
 
 async function hU(ws,vh,log){
@@ -193,17 +197,15 @@ async function hU(ws,vh,log){
     if(cache.length>4096)cache=E8;
   }});
   ts.readable.pipeTo(new WritableStream({async write(udp){
-    let tid;
     try{
-      const ac=new AbortController();tid=setTimeout(()=>ac.abort(),TO);
-      const resp=await fetch('https://cloudflare-dns.com/dns-query',{method:'POST',headers:{'content-type':'application/dns-message'},body:udp,signal:ac.signal});
+      const resp=await fTO('https://cloudflare-dns.com/dns-query',{method:'POST',headers:{'content-type':'application/dns-message'},body:udp});
       const res=new Uint8Array(await resp.arrayBuffer()),len=new Uint8Array([res.length>>8,res.length&255]);
       log(`doh success and dns message length is ${res.length}`);
       if(ws.readyState===WO){
-        if(!sent){const m=new Uint8Array(vh.length+2+res.length);m.set(vh);m.set(len,vh.length);m.set(res,vh.length+2);ws.send(m);sent=true;}
-        else{const m=new Uint8Array(2+res.length);m.set(len);m.set(res,2);ws.send(m);}
+        if(!sent){ws.send(cu(vh,len,res));sent=true;}
+        else ws.send(cu(len,res));
       }
-    }catch(e){log('dns udp has error'+e);}finally{clearTimeout(tid);}
+    }catch(e){log('dns udp has error'+e);}
   }})).catch(()=>{});
   return ts.writable.getWriter();
 }
