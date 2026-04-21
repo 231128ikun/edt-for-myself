@@ -50,6 +50,9 @@ const cu=(...parts)=>{const list=parts.map(u8),o=new Uint8Array(list.reduce((n,p
 const isTXT=s=>/^txt@/i.test(s||'');
 const getTXT=s=>isTXT(s)?s.slice(4):'';
 const fTO=async(url,init)=>{let tid;try{const ac=new AbortController();tid=setTimeout(()=>ac.abort(),TO);return await fetch(url,{...(init||{}),signal:ac.signal});}finally{clearTimeout(tid);}};
+const mkC=(sock,tail=E8)=>({sock,tail});
+const hEnd=b=>{for(let i=0;i+3<b.length;i++)if(b[i]===13&&b[i+1]===10&&b[i+2]===13&&b[i+3]===10)return i;return-1;};
+const rN=async(r,buf,n)=>{while(buf.length<n){const{value,done}=await rc(r.read(),TO);if(done)throw new Error('Proxy closed');buf=buf.length?cu(buf,value):u8(value);}return[buf.slice(0,n),buf.slice(n)];};
 
 async function qT(d){
   try{const r=await fTO(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(d)}&type=TXT`,{headers:{accept:'application/dns-json'}});if(!r.ok)return null;const j=await r.json();return j.Answer?.filter(x=>x.type===16).map(x=>x.data)||[];}catch{return null;}
@@ -78,15 +81,15 @@ async function hW(r,px,s5,gs5){
   const eh=r.headers.get('sec-websocket-protocol')||'',rs=mR(server,eh);
   let addr='',portLog='';
   const log=(info,ev)=>console.log(`[${addr}:${portLog}] ${info}`,ev||'');
-  let remote=null,dnsW=null,dns=false,busy=false;
-  const clean=()=>{dnsW=null;dns=false;cl(remote);clWS(server);};
+  let remote=null,dnsW=null,dns=false;
+  const setRemote=v=>{remote=v;};
+  const clean=()=>{dnsW=null;dns=false;cl(remote?.sock);remote=null;clWS(server);};
   rs.pipeTo(new WritableStream({
     async write(ch){
       try{
         const d=u8(ch);if(!d.length)return;
         if(dns&&dnsW){await dnsW(d);return;}
-        if(remote){await wF(remote,d);return;}
-        if(busy)return;busy=true;
+        if(remote){await wF(remote.sock,d);return;}
         const p=pV(d.buffer);if(!p)return clean();
         const{addr:a,port,idx,ver,isUDP}=p;
         addr=a;portLog=`${port}--${Math.random()} ${isUDP?'udp ':'tcp '}`;
@@ -99,7 +102,7 @@ async function hW(r,px,s5,gs5){
           return;
         }
         log(`connected to ${addr}:${port}`);
-        try{remote=await hT(addr,port,payload,server,vh,px,s5,gs5,log);}catch(e){log('hT error',e?.message);clean();}
+        try{await hT(addr,port,payload,server,vh,px,s5,gs5,log,setRemote);}catch(e){log('hT error',e?.message);clean();}
       }catch(e){log('write error',e?.message);clean();}
     },
     close(){log('readableWebSocketStream is close');clean();},
@@ -115,14 +118,14 @@ const rL=o=>{try{o?.releaseLock?.()}catch{}};
 
 function pF(addr,port,px,s5cfg){
   if(s5cfg)return()=>s5cfg.isHttp?hC(addr,port,s5cfg):sC(addr,port,s5cfg);
-  if(isTXT(px)){return async()=>{const d=getTXT(px),list=await pT(d);if(list?.length){const sel=rn(list);return dl(sel.h,sel.p);}const[ph,pp]=pH(d,port);return dl(ph,pp);};}
-  return()=>{const[ph,pp]=pH(px,port);return dl(ph,pp);};
+  if(isTXT(px)){return async()=>{const d=getTXT(px),list=await pT(d);if(list?.length){const sel=rn(list);return mkC(await dl(sel.h,sel.p));}const[ph,pp]=pH(d,port);return mkC(await dl(ph,pp));};}
+  return async()=>{const[ph,pp]=pH(px,port);return mkC(await dl(ph,pp));};
 }
 
-async function hT(addr,port,data,ws,vh,px,s5,gs5,log){
+async function hT(addr,port,data,ws,vh,px,s5,gs5,log,setRemote){
   const s5cfg=s5?pS(s5):null,fb=pF(addr,port,px,s5cfg);
-  const cR=(s,retryFn)=>{rl(s,ws,vh,retryFn,log);return s;};
-  const cF=async()=>cR(await wF(await fb(),data),null);
+  const cR=(sock,retryFn,tail=E8)=>{const conn=mkC(sock,tail);setRemote(conn);rl(conn,ws,vh,retryFn,log);return conn;};
+  const cF=async()=>{const{sock:proxy,tail}=await fb();await wF(proxy,data);return cR(proxy,null,tail);};
   let sock=null;
   try{
     if(gs5&&s5cfg)return cF();
@@ -140,12 +143,13 @@ async function hT(addr,port,data,ws,vh,px,s5,gs5,log){
   }
 }
 
-async function rl(rs,ws,vh,retryFn,log){
+async function rl(conn,ws,vh,retryFn,log){
   let hdr=vh,hasData=false;
+  if(conn.tail.length){hasData=true;if(ws.readyState!==WO)throw new Error('ws closed');ws.send(cu(hdr,conn.tail));hdr=null;conn.tail=E8;}
   const retry=async()=>{if(!hasData&&retryFn&&ws.readyState===WO){try{await retryFn();return 1;}catch{}}return 0;};
   const onEnd=async(label,r)=>{if(label==='abort')console.error('remoteConnection!.readable abort',r);if(!await retry())clWS(ws);};
   try{
-    await rs.readable.pipeTo(new WritableStream({
+    await conn.sock.readable.pipeTo(new WritableStream({
       write(ch){
         hasData=true;
         const d=u8(ch);if(!d.length)return;
@@ -169,7 +173,7 @@ async function hC(h,pt,cfg){
     const req=`CONNECT ${hh}:${pt} HTTP/1.1\r\nHost: ${hh}:${pt}\r\n${auth}Connection: Keep-Alive\r\n\r\n`;
     await wF(s,TE.encode(req));
     r=s.readable.getReader();let buf=E8;const start=Date.now();
-    while(Date.now()-start<TO){const{value,done}=await rc(r.read(),TO);if(done)throw new Error('Proxy closed');buf=cu(buf,value);const txt=TD.decode(buf);if(txt.includes('\r\n\r\n')){if(!txt.startsWith('HTTP/1.1 200')&&!txt.startsWith('HTTP/1.0 200'))throw new Error('Connect failed');rL(r);return s;}}
+    while(Date.now()-start<TO){const{value,done}=await rc(r.read(),TO);if(done)throw new Error('Proxy closed');buf=buf.length?cu(buf,value):u8(value);const i=hEnd(buf);if(i!==-1){const txt=TD.decode(buf.slice(0,i+4));if(!txt.startsWith('HTTP/1.1 200')&&!txt.startsWith('HTTP/1.0 200'))throw new Error('Connect failed');const tail=buf.slice(i+4);rL(r);return mkC(s,tail);}}
     rL(r);throw new Error('Timeout');
   }catch(e){rL(r);cl(s);throw e;}
 }
@@ -178,13 +182,17 @@ async function sC(h,pt,cfg){
   const s=await oS(cfg);let sw=null,sr=null;
   try{
     sw=s.writable.getWriter();sr=s.readable.getReader();
-    await sw.write(new Uint8Array([5,2,0,2]));let r=await rc(sr.read(),TO);
-    if(!r?.value||r.done)throw new Error('No auth response');
-    if(r.value[1]===0xFF)throw new Error('No acceptable auth method');
-    if(r.value[1]===2){if(!cfg.u||!cfg.p)throw new Error('Auth required');const uE=TE.encode(cfg.u),pE=TE.encode(cfg.p);await sw.write(new Uint8Array([1,uE.length,...uE,pE.length,...pE]));r=await rc(sr.read(),TO);if(!r?.value||r.done||r.value[1]!==0)throw new Error('Auth failed');}
+    await sw.write(new Uint8Array([5,2,0,2]));let buf=E8,head;
+    [head,buf]=await rN(sr,buf,2);
+    if(head[1]===0xFF)throw new Error('No acceptable auth method');
+    if(head[1]===2){if(!cfg.u||!cfg.p)throw new Error('Auth required');const uE=TE.encode(cfg.u),pE=TE.encode(cfg.p);await sw.write(new Uint8Array([1,uE.length,...uE,pE.length,...pE]));[head,buf]=await rN(sr,buf,2);if(head[1]!==0)throw new Error('Auth failed');}
     const addr=sA(h),req=new Uint8Array(3+addr.length+2);req[0]=5;req[1]=1;req[2]=0;req.set(addr,3);req[3+addr.length]=pt>>8;req[4+addr.length]=pt&255;await sw.write(req);
-    r=await rc(sr.read(),TO);if(!r?.value||r.done||r.value[1]!==0)throw new Error('Connect failed');
-    rL(sr);rL(sw);return s;
+    [head,buf]=await rN(sr,buf,4);if(head[1]!==0)throw new Error('Connect failed');
+    if(head[3]===1)[,buf]=await rN(sr,buf,4+2);
+    else if(head[3]===4)[,buf]=await rN(sr,buf,16+2);
+    else if(head[3]===3){let len;[len,buf]=await rN(sr,buf,1);[,buf]=await rN(sr,buf,len[0]+2);}
+    else throw new Error('Invalid atyp');
+    rL(sr);rL(sw);return mkC(s,buf);
   }catch(e){rL(sr);rL(sw);cl(s);throw e;}
 }
 
