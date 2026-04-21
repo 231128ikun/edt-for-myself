@@ -17,7 +17,6 @@ const CM=64;
 const WO=1,E8=new Uint8Array(0),TE=new TextEncoder(),TD=new TextDecoder();
 const UB=Uint8Array.from(U.replace(/-/g,'').match(/.{2}/g).map(x=>parseInt(x,16)));
 const RE={P:/p=([^&]*)/,S5:/s5=([^&]*)/,GS5:/gs5=([^&]*)/};
-const DOH='https://cloudflare-dns.com/dns-query';
 const TC=new Map(),TP=new Map();
 
 if(!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(U))throw new Error('Invalid UUID');
@@ -49,7 +48,8 @@ const sA=h=>{if(iV(h))return new Uint8Array([1,...h.split('.').map(Number)]);con
 const rn=a=>a[Math.floor(Math.random()*a.length)];
 
 async function qT(d){
-  try{const ac=new AbortController(),tid=setTimeout(()=>ac.abort(),TO);const r=await fetch(`${DOH}?name=${encodeURIComponent(d)}&type=TXT`,{headers:{accept:'application/dns-json'},signal:ac.signal});clearTimeout(tid);if(!r.ok)return null;const j=await r.json();return j.Answer?.filter(x=>x.type===16).map(x=>x.data)||[];}catch{return null;}
+  let tid;
+  try{const ac=new AbortController();tid=setTimeout(()=>ac.abort(),TO);const r=await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(d)}&type=TXT`,{headers:{accept:'application/dns-json'},signal:ac.signal});if(!r.ok)return null;const j=await r.json();return j.Answer?.filter(x=>x.type===16).map(x=>x.data)||[];}catch{return null;}finally{clearTimeout(tid);}
 }
 
 async function pT(d){
@@ -70,8 +70,8 @@ async function pT(d){
 async function hW(r,px,s5,gs5){
   const[client,server]=Object.values(new WebSocketPair());
   server.accept();
-  if(/^txt@/i.test(px))pT(px.slice(4)).catch(e=>console.log(`[pT] warmup failed: ${e?.message}`));
   server.binaryType='arraybuffer';
+  if(/^txt@/i.test(px))pT(px.slice(4)).catch(e=>console.log(`[pT] warmup failed: ${e?.message}`));
   const eh=r.headers.get('sec-websocket-protocol')||'',rs=mR(server,eh);
   let addr='',portLog='';
   const log=(info,ev)=>console.log(`[${addr}:${portLog}] ${info}`,ev||'');
@@ -193,17 +193,17 @@ async function hU(ws,vh,log){
     if(cache.length>4096)cache=E8;
   }});
   ts.readable.pipeTo(new WritableStream({async write(udp){
+    let tid;
     try{
-      const ac=new AbortController(),tid=setTimeout(()=>ac.abort(),TO);
-      const resp=await fetch(DOH,{method:'POST',headers:{'content-type':'application/dns-message'},body:udp,signal:ac.signal});
-      clearTimeout(tid);
+      const ac=new AbortController();tid=setTimeout(()=>ac.abort(),TO);
+      const resp=await fetch('https://cloudflare-dns.com/dns-query',{method:'POST',headers:{'content-type':'application/dns-message'},body:udp,signal:ac.signal});
       const res=new Uint8Array(await resp.arrayBuffer()),len=new Uint8Array([res.length>>8,res.length&255]);
       log(`doh success and dns message length is ${res.length}`);
       if(ws.readyState===WO){
         if(!sent){const m=new Uint8Array(vh.length+2+res.length);m.set(vh);m.set(len,vh.length);m.set(res,vh.length+2);ws.send(m);sent=true;}
         else{const m=new Uint8Array(2+res.length);m.set(len);m.set(res,2);ws.send(m);}
       }
-    }catch(e){log('dns udp has error'+e);}
+    }catch(e){log('dns udp has error'+e);}finally{clearTimeout(tid);}
   }})).catch(()=>{});
   return ts.writable.getWriter();
 }
