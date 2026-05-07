@@ -3,20 +3,21 @@
 */
 import{connect as C}from'cloudflare:sockets';
 
-const V='3.0.8';
+const V='3.0.9';
 const U='aaa6b096-1165-4bbe-935c-99f4ec902d02';
 const P='txt@kr.william.dwb.cc.cd';
 const S5='';
 const GS5=false;
+const D=false;
 const SUB='sub.glimmer.hidns.vip';
 const UID='ikun';
 const TO=12000;
 const CT=3*60*60*1000;
 const CM=64;
+const BM=16*1024,BH=4*1024*1024,BT=10;
 
 const WO=1,E8=new Uint8Array(0),TE=new TextEncoder(),TD=new TextDecoder();
 const UB=Uint8Array.from(U.replace(/-/g,'').match(/.{2}/g).map(x=>parseInt(x,16)));
-const RE={P:/p=([^&]*)/,S5:/s5=([^&]*)/,GS5:/gs5=([^&]*)/};
 const TC=new Map(),TP=new Map();
 
 if(!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(U))throw new Error('Invalid UUID');
@@ -26,14 +27,15 @@ export default{async fetch(r){
     const u=new URL(r.url);
     if(UID&&u.pathname==='/'+UID){const s=u.searchParams.get('sub')||SUB;return s?Response.redirect(`https://${s}/sub?uuid=${U}&host=${u.hostname}`,302):new Response('Missing sub param',{status:400});}
     if(r.headers.get('Upgrade')?.toLowerCase()!=='websocket')return u.pathname==='/'?new Response(`mini v${V}`,{status:200}):new Response(null,{status:404});
-    const tp=u.pathname+u.search,px=tp.match(RE.P)?.[1]||P,s5=tp.match(RE.S5)?.[1]||S5;
-    const gm=tp.match(RE.GS5),gs5=gm?(gm[1]==='1'||gm[1]?.toLowerCase()==='true'):GS5;
+    const px=qP(u,'p')||P,s5=qP(u,'s5')||S5,gm=qP(u,'gs5');
+    const gs5=gm!==null?(gm==='1'||gm?.toLowerCase()==='true'):GS5;
     return hW(r,px,s5,gs5);
   }catch(e){return new Response('Error: '+(e?.message||'unknown'),{status:502});}
 }};
 
 const cl=o=>{try{o?.close?.()}catch{}};
 const clWS=o=>{try{if(o?.readyState===1||o?.readyState===2)o.close();}catch{}};
+const lg=(...a)=>D&&console.log(...a),le=(...a)=>D&&console.error(...a);
 const rc=(p,ms)=>{let t;return Promise.race([p,new Promise((_,r)=>{t=setTimeout(()=>r(new Error('timeout')),ms);})]).finally(()=>clearTimeout(t));};
 const u8=x=>x instanceof Uint8Array?x:x instanceof ArrayBuffer?new Uint8Array(x):ArrayBuffer.isView(x)?new Uint8Array(x.buffer,x.byteOffset,x.byteLength):E8;
 const b64=b=>{if(!b)return null;try{let s=b.replace(/-/g,'+').replace(/_/g,'/');s=s.padEnd(Math.ceil(s.length/4)*4,'=');return Uint8Array.from(atob(s),c=>c.charCodeAt(0));}catch{return null;}};
@@ -47,12 +49,17 @@ const bV6=(b,off)=>{const dv=new DataView(b,off,16),segs=[];for(let i=0;i<8;i++)
 const sA=h=>{if(iV(h))return new Uint8Array([1,...h.split('.').map(Number)]);const v6=vB(h);if(v6){const o=new Uint8Array(17);o[0]=4;o.set(v6,1);return o;}const d=TE.encode(h);if(d.length>255)throw new Error('Domain too long');const o=new Uint8Array(2+d.length);o[0]=3;o[1]=d.length;o.set(d,2);return o;};
 const rn=a=>a[Math.floor(Math.random()*a.length)];
 const cu=(...parts)=>{const list=parts.map(u8),o=new Uint8Array(list.reduce((n,p)=>n+p.length,0));let off=0;for(const p of list){o.set(p,off);off+=p.length;}return o;};
+const de=s=>{try{return decodeURIComponent(s);}catch{return s;}};
+const qP=(u,k)=>{const q=u.search.slice(1);if(!q)return null;for(const p of q.split('&')){const i=p.indexOf('='),a=i<0?p:p.slice(0,i);if(de(a)===k)return i<0?'':de(p.slice(i+1));}return null;};
 const isTXT=s=>/^txt@/i.test(s||'');
 const getTXT=s=>isTXT(s)?s.slice(4):'';
 const fTO=async(url,init)=>{let tid;try{const ac=new AbortController();tid=setTimeout(()=>ac.abort(),TO);return await fetch(url,{...(init||{}),signal:ac.signal});}finally{clearTimeout(tid);}};
 const mkC=(sock,tail=E8)=>({sock,tail});
 const hEnd=b=>{for(let i=0;i+3<b.length;i++)if(b[i]===13&&b[i+1]===10&&b[i+2]===13&&b[i+3]===10)return i;return-1;};
 const rN=async(r,buf,n)=>{while(buf.length<n){const{value,done}=await rc(r.read(),TO);if(done)throw new Error('Proxy closed');buf=buf.length?cu(buf,value):u8(value);}return[buf.slice(0,n),buf.slice(n)];};
+const sl=t=>new Promise(r=>setTimeout(r,t));
+const bP=async ws=>{if(typeof ws.bufferedAmount!=='number')return;while(ws.readyState===WO&&ws.bufferedAmount>BH)await sl(BT);};
+const rB=async(s,fn)=>{const r=s.readable.getReader({mode:'byob'});try{for(;;){const{value,done}=await r.read(new Uint8Array(BM));if(done)return;const d=u8(value);if(d.length)await fn(d);}}finally{rL(r);}};
 
 async function qT(d){
   try{const r=await fTO(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(d)}&type=TXT`,{headers:{accept:'application/dns-json'}});if(!r.ok)return null;const j=await r.json();return j.Answer?.filter(x=>x.type===16).map(x=>x.data)||[];}catch{return null;}
@@ -62,7 +69,7 @@ async function pT(d){
   const cached=TC.get(d);if(cached&&Date.now()<cached.exp){cC(d);return cached.v;}
   if(TP.has(d))return TP.get(d);
   const task=(async()=>{
-    const recs=await qT(d);if(!recs?.length){console.log(`[pT] TXT query failed: ${d}`);return null;}
+    const recs=await qT(d);if(!recs?.length){lg(`[pT] TXT query failed: ${d}`);return null;}
     const list=recs.flatMap(x=>eT(x).split(',')).map(s=>s.trim()).filter(Boolean);
     const parsed=list.map(vE).filter(Boolean);
     if(!parsed.length)return null;
@@ -77,10 +84,10 @@ async function hW(r,px,s5,gs5){
   const[client,server]=Object.values(new WebSocketPair());
   server.accept();
   server.binaryType='arraybuffer';
-  if(isTXT(px))pT(getTXT(px)).catch(e=>console.log(`[pT] warmup failed: ${e?.message}`));
+  if(isTXT(px))pT(getTXT(px)).catch(e=>lg(`[pT] warmup failed: ${e?.message}`));
   const eh=r.headers.get('sec-websocket-protocol')||'',rs=mR(server,eh);
   let addr='',portLog='';
-  const log=(info,ev)=>console.log(`[${addr}:${portLog}] ${info}`,ev||'');
+  const log=(info,ev)=>lg(`[${addr}:${portLog}] ${info}`,ev||'');
   let remote=null,dnsW=null,dns=false;
   const setRemote=v=>{remote=v;};
   const clean=()=>{dnsW=null;dns=false;cl(remote?.sock);remote=null;clWS(server);};
@@ -90,7 +97,7 @@ async function hW(r,px,s5,gs5){
         const d=u8(ch);if(!d.length)return;
         if(dns&&dnsW){await dnsW(d);return;}
         if(remote){await wF(remote.sock,d);return;}
-        const p=pV(d.buffer);if(!p)return clean();
+        const p=pV(d);if(!p)return clean();
         const{addr:a,port,idx,ver,isUDP}=p;
         addr=a;portLog=`${port}--${Math.random()} ${isUDP?'udp ':'tcp '}`;
         const vh=new Uint8Array([ver,0]),payload=d.slice(idx);
@@ -111,21 +118,20 @@ async function hW(r,px,s5,gs5){
   return new Response(null,{status:101,webSocket:client});
 }
 
-async function dl(h,p){const s=C({hostname:h,port:p});await rc(s.opened,TO);return s;}
-async function oS(cfg){return dl(cfg.h,cfg.pt);}
+async function dl(h,p){const s=C({hostname:h,port:p});try{await rc(s.opened,TO);return s;}catch(e){cl(s);throw e;}}
 async function wF(s,data){if(data?.length){const w=s.writable.getWriter();try{await w.write(data);}finally{w.releaseLock();}}return s;}
 const rL=o=>{try{o?.releaseLock?.()}catch{}};
 
 function pF(addr,port,px,s5cfg){
   if(s5cfg)return()=>s5cfg.isHttp?hC(addr,port,s5cfg):sC(addr,port,s5cfg);
-  if(isTXT(px)){return async()=>{const d=getTXT(px),list=await pT(d);if(list?.length){const sel=rn(list);return mkC(await dl(sel.h,sel.p));}const[ph,pp]=pH(d,port);return mkC(await dl(ph,pp));};}
+  if(isTXT(px)){return async()=>{const d=getTXT(px),list=await pT(d);if(list?.length){const x=rn(list);return mkC(await dl(x.h,x.p));}const[ph,pp]=pH(d,port);return mkC(await dl(ph,pp));};}
   return async()=>{const[ph,pp]=pH(px,port);return mkC(await dl(ph,pp));};
 }
 
 async function hT(addr,port,data,ws,vh,px,s5,gs5,log,setRemote){
   const s5cfg=s5?pS(s5):null,fb=pF(addr,port,px,s5cfg);
   const cR=(sock,retryFn,tail=E8)=>{const conn=mkC(sock,tail);setRemote(conn);rl(conn,ws,vh,retryFn,log);return conn;};
-  const cF=async()=>{const{sock:proxy,tail}=await fb();await wF(proxy,data);return cR(proxy,null,tail);};
+  const cF=async()=>{const c=await fb();try{await wF(c.sock,data);return cR(c.sock,null,c.tail);}catch(e){cl(c.sock);throw e;}};
   let sock=null;
   try{
     if(gs5&&s5cfg)return cF();
@@ -147,27 +153,24 @@ async function rl(conn,ws,vh,retryFn,log){
   let hdr=vh,hasData=false;
   if(conn.tail.length){hasData=true;if(ws.readyState!==WO)throw new Error('ws closed');ws.send(cu(hdr,conn.tail));hdr=null;conn.tail=E8;}
   const retry=async()=>{if(!hasData&&retryFn&&ws.readyState===WO){try{await retryFn();return 1;}catch{}}return 0;};
-  const onEnd=async(label,r)=>{if(label==='abort')console.error('remoteConnection!.readable abort',r);if(!await retry())clWS(ws);};
+  const onEnd=async(label,r)=>{if(label==='abort')le('remoteConnection!.readable abort',r);if(!await retry())clWS(ws);};
   try{
-    await conn.sock.readable.pipeTo(new WritableStream({
-      write(ch){
-        hasData=true;
-        const d=u8(ch);if(!d.length)return;
-        if(ws.readyState!==WO)throw new Error('ws closed');
-        if(hdr){ws.send(cu(hdr,d));hdr=null;}
-        else ws.send(d);
-      },
-      close(){log(`remoteConnection!.readable is close with hasIncomingData is ${hasData}`);return onEnd('close');},
-      abort(r){return onEnd('abort',r);}
-    }));
+    await rB(conn.sock,async d=>{
+      hasData=true;
+      if(ws.readyState!==WO)throw new Error('ws closed');
+      if(hdr){ws.send(cu(hdr,d));hdr=null;}
+      else ws.send(d);
+      await bP(ws);
+    });
+    log(`remoteConnection!.readable is close with hasIncomingData is ${hasData}`);return onEnd('close');
   }catch(e){
-    console.error('remoteSocketToWS has exception',e?.stack||e);
+    le('remoteSocketToWS has exception',e?.stack||e);
     if(!await retry())clWS(ws);
   }
 }
 
 async function hC(h,pt,cfg){
-  const s=await oS(cfg);let r=null;
+  const s=await dl(cfg.h,cfg.pt);let r=null;
   try{
     const hh=h.includes(':')?`[${h}]`:h,auth=cfg.u&&cfg.p?`Proxy-Authorization: Basic ${btoa(cfg.u+':'+cfg.p)}\r\n`:'';
     const req=`CONNECT ${hh}:${pt} HTTP/1.1\r\nHost: ${hh}:${pt}\r\n${auth}Connection: Keep-Alive\r\n\r\n`;
@@ -179,7 +182,7 @@ async function hC(h,pt,cfg){
 }
 
 async function sC(h,pt,cfg){
-  const s=await oS(cfg);let sw=null,sr=null;
+  const s=await dl(cfg.h,cfg.pt);let sw=null,sr=null;
   try{
     sw=s.writable.getWriter();sr=s.readable.getReader();
     await sw.write(new Uint8Array([5,2,0,2]));let buf=E8,head;
@@ -218,17 +221,17 @@ async function hU(ws,vh,log){
   return ts.writable.getWriter();
 }
 
-function pV(b){
-  if(!b||b.byteLength<24)return null;const d=new Uint8Array(b),ver=d[0];
+function pV(d){
+  d=u8(d);const bl=d.byteLength;if(bl<24)return null;const ver=d[0];
   for(let i=0;i<16;i++)if(d[1+i]!==UB[i])return null;
-  const optLen=d[17];if(18+optLen>=b.byteLength)return null;
+  const optLen=d[17];if(18+optLen>=bl)return null;
   const cmd=d[18+optLen];if(cmd!==1&&cmd!==2)return null;const isUDP=cmd===2;
-  const portIdx=19+optLen;if(portIdx+2>b.byteLength)return null;
-  const port=new DataView(b,portIdx,2).getUint16(0);let addrIdx=portIdx+2;if(addrIdx>=b.byteLength)return null;
+  const portIdx=19+optLen;if(portIdx+2>bl)return null;
+  const port=(d[portIdx]<<8)|d[portIdx+1];let addrIdx=portIdx+2;if(addrIdx>=bl)return null;
   let addr='';const atyp=d[addrIdx++];
-  if(atyp===1){if(addrIdx+4>b.byteLength)return null;addr=d.slice(addrIdx,addrIdx+4).join('.');addrIdx+=4;}
-  else if(atyp===2){if(addrIdx>=b.byteLength)return null;const len=d[addrIdx++];if(len>253||addrIdx+len>b.byteLength)return null;addr=TD.decode(b.slice(addrIdx,addrIdx+len));addrIdx+=len;}
-  else if(atyp===3){if(addrIdx+16>b.byteLength)return null;addr=bV6(b,addrIdx);addrIdx+=16;}
+  if(atyp===1){if(addrIdx+4>bl)return null;addr=d.slice(addrIdx,addrIdx+4).join('.');addrIdx+=4;}
+  else if(atyp===2){if(addrIdx>=bl)return null;const len=d[addrIdx++];if(len>253||addrIdx+len>bl)return null;addr=TD.decode(d.slice(addrIdx,addrIdx+len));addrIdx+=len;}
+  else if(atyp===3){if(addrIdx+16>bl)return null;addr=bV6(d.buffer,d.byteOffset+addrIdx);addrIdx+=16;}
   else return null;
   return{addr,port,idx:addrIdx,ver,isUDP};
 }
