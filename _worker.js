@@ -3,7 +3,7 @@
 */
 import{connect as C}from'cloudflare:sockets';
 
-const V='3.0.9';
+const V='3.0.10';
 const U='aaa6b096-1165-4bbe-935c-99f4ec902d02';
 const P='txt@kr.william.dwb.cc.cd';
 const S5='';
@@ -33,9 +33,9 @@ export default{async fetch(r){
 }};
 
 const cl=o=>{try{o?.close?.()}catch{}};
-const clWS=o=>{try{if(o?.readyState===1||o?.readyState===2)o.close();}catch{}};
-const clW=o=>{try{o?.close?.()}catch{}try{o?.releaseLock?.()}catch{}};
-const lg=(...a)=>D&&console.log(...a),le=(...a)=>D&&console.error(...a);
+const clWS=o=>{try{o?.close?.()}catch{}};
+const clW=o=>{if(!o)return;try{Promise.resolve(o.close?.()).catch(()=>{}).finally(()=>rL(o));}catch{rL(o);}};
+const lg=D?console.log.bind(console):()=>{},le=D?console.error.bind(console):()=>{};
 const rc=(p,ms)=>{let t;return Promise.race([p,new Promise((_,r)=>{t=setTimeout(()=>r(new Error('timeout')),ms);})]).finally(()=>clearTimeout(t));};
 const u8=x=>x instanceof Uint8Array?x:x instanceof ArrayBuffer?new Uint8Array(x):ArrayBuffer.isView(x)?new Uint8Array(x.buffer,x.byteOffset,x.byteLength):E8;
 const b64=b=>{if(!b)return null;try{let s=b.replace(/-/g,'+').replace(/_/g,'/');s=s.padEnd(Math.ceil(s.length/4)*4,'=');return Uint8Array.from(atob(s),c=>c.charCodeAt(0));}catch{return null;}};
@@ -84,14 +84,14 @@ async function hW(r,px,s5,gs5){
   const eh=r.headers.get('sec-websocket-protocol')||'',rs=mR(server,eh);
   let addr='',portLog='';
   const log=(info,ev)=>lg(`[${addr}:${portLog}] ${info}`,ev||'');
-  let remote=null,dnsW=null,dns=false;
+  let remote=null,dnsW=null,dns=false,cleaned=false;
   const setRemote=v=>{remote=v;};
-  const clean=()=>{const w=dnsW,s=remote?.sock;dnsW=null;dns=false;remote=null;clW(w);cl(s);clWS(server);};
+  const clean=()=>{if(cleaned)return;cleaned=true;const w=dnsW,s=remote?.sock;dnsW=null;dns=false;remote=null;clW(w);cl(s);clWS(server);};
   rs.pipeTo(new WritableStream({
     async write(ch){
       try{
         const d=u8(ch);if(!d.length)return;
-        if(dns&&dnsW){await dnsW(d);return;}
+        if(dns&&dnsW){await dnsW.write(d);return;}
         if(remote){await wF(remote.sock,d);return;}
         const p=pV(d);if(!p)return clean();
         const{addr:a,port,idx,ver,isUDP}=p;
@@ -99,9 +99,9 @@ async function hW(r,px,s5,gs5){
         const vh=new Uint8Array([ver,0]),payload=d.slice(idx);
         if(isUDP){
           if(port!==53){log('UDP proxy only enable for DNS which is port 53');return clean();}
+          dnsW=await hU(server,vh,log,clean);
           dns=true;
-          const h=await hU(server,vh,log);dnsW=h.write.bind(h);
-          if(payload.length)await dnsW(payload);
+          if(payload.length)await dnsW.write(payload);
           return;
         }
         log(`connected to ${addr}:${port}`);
@@ -110,7 +110,7 @@ async function hW(r,px,s5,gs5){
     },
     close(){log('readableWebSocketStream is close');clean();},
     abort(r){log('readableWebSocketStream is abort',JSON.stringify(r));clean();}
-  })).catch(e=>log('pipeTo error',e?.message));
+  })).catch(e=>{log('pipeTo error',e?.message);clean();});
   return new Response(null,{status:101,webSocket:client});
 }
 
@@ -127,7 +127,7 @@ function pF(addr,port,px,s5cfg){
 
 async function hT(addr,port,data,ws,vh,px,s5,gs5,log,setRemote){
   const s5cfg=s5?pS(s5):null,fb=pF(addr,port,px,s5cfg);
-  const cR=(sock,retryFn,tail=E8)=>{const conn=mkC(sock,tail);setRemote(conn);rl(conn,ws,vh,retryFn,log);return conn;};
+  const cR=(sock,retryFn,tail=E8)=>{const conn=mkC(sock,tail);setRemote(conn);rl(conn,ws,vh,retryFn,log).catch(e=>le('rl error',e?.message));return conn;};
   const cF=async()=>{const c=await fb();try{await wF(c.sock,data);return cR(c.sock,null,c.tail);}catch(e){cl(c.sock);throw e;}};
   let sock=null;
   try{
@@ -148,10 +148,10 @@ async function hT(addr,port,data,ws,vh,px,s5,gs5,log,setRemote){
 
 async function rl(conn,ws,vh,retryFn,log){
   let hdr=vh,hasData=false;
-  if(conn.tail.length){hasData=true;if(ws.readyState!==WO)throw new Error('ws closed');ws.send(cu(hdr,conn.tail));hdr=null;conn.tail=E8;}
   const retry=async()=>{if(!hasData&&retryFn&&ws.readyState===WO){try{await retryFn();return 1;}catch{}}return 0;};
   const onEnd=async(label,r)=>{if(label==='abort')le('remoteConnection!.readable abort',r);if(!await retry())clWS(ws);};
   try{
+    if(conn.tail.length){hasData=true;if(ws.readyState!==WO)throw new Error('ws closed');ws.send(cu(hdr,conn.tail));hdr=null;conn.tail=E8;}
     await conn.sock.readable.pipeTo(new WritableStream({
       write(ch){
         hasData=true;
@@ -199,7 +199,7 @@ async function sC(h,pt,cfg){
   }catch(e){rL(sr);rL(sw);cl(s);throw e;}
 }
 
-async function hU(ws,vh,log){
+async function hU(ws,vh,log,onErr){
   let sent=false,cache=E8;
   const ts=new TransformStream({transform(chunk,ctl){
     let d=u8(chunk);
@@ -210,6 +210,7 @@ async function hU(ws,vh,log){
   ts.readable.pipeTo(new WritableStream({async write(udp){
     try{
       const resp=await fTO('https://cloudflare-dns.com/dns-query',{method:'POST',headers:{'content-type':'application/dns-message'},body:udp});
+      if(!resp.ok){log(`doh error status ${resp.status}`);return;}
       const res=new Uint8Array(await rc(resp.arrayBuffer(),TO)),len=new Uint8Array([res.length>>8,res.length&255]);
       log(`doh success and dns message length is ${res.length}`);
       if(ws.readyState===WO){
@@ -217,7 +218,7 @@ async function hU(ws,vh,log){
         else ws.send(cu(len,res));
       }
     }catch(e){log('dns udp has error'+e);}
-  }})).catch(()=>{});
+  }})).catch(e=>{log('dns pipeTo error',e?.message||e);try{onErr?.(e);}catch{}});
   return ts.writable.getWriter();
 }
 
@@ -248,7 +249,7 @@ function mR(ws,eh){
   let closed=false;
   return new ReadableStream({
     start(c){
-      ws.addEventListener('message',e=>{if(!closed)c.enqueue(e.data);});
+      ws.addEventListener('message',e=>{if(closed)return;try{c.enqueue(e.data);}catch{closed=true;clWS(ws);}});
       ws.addEventListener('close',()=>{clWS(ws);if(!closed){closed=true;try{c.close();}catch{}}});
       ws.addEventListener('error',e=>{if(!closed){closed=true;try{c.error(e);}catch{}}});
       const d=b64(eh);if(d&&!closed)c.enqueue(d);
