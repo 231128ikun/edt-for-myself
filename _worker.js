@@ -114,7 +114,7 @@ function ws(r,px,s5,gs5){
   const pd=tH(px);if(pd)pT(pd).catch(e=>lg(`[pT] warmup failed: ${e?.message}`));
   const dc=dial(r);let c=null,dw=null,dns=false,closed=false,busy=false,hold=false,addr='',pl='';
   const q=mkQ(K.up,K.uq,K.uq>>8),log=(i,e)=>lg(`[${addr}:${pl}] ${i}`,e||'');
-  const setC=(x,p=false)=>{c=x;hold=p;if(!hold&&!q.empty&&!closed)pump()};
+  const setC=(x,p=false)=>{if(closed){closeAll(x);return 0}c=x;hold=p;if(!hold&&!q.empty)pump();return 1};
   const end=()=>{if(closed)return;closed=true;q.clear();closeAll(dw,c,w);dw=null;c=null;dns=false};
   const add=x=>{const d=u8(x);if(!d.length)return 1;if(q.push(d))return 1;end();return 0};
   const open=async d=>{
@@ -124,9 +124,9 @@ function ws(r,px,s5,gs5){
     if(p.isUDP)return openU(p,first,vh);
     if(w.readyState!==WebSocket.OPEN)throw new Error('ws closed');
     w.send(vh);
-    const nc=await cn(dc,p.addr,p.port,first,px,s5,gs5,w,log);setC(nc);rl(nc,w,log,end,setC).catch(e=>le('rl error',e?.message));
+    const nc=await cn(dc,p.addr,p.port,first,px,s5,gs5,w,log);if(!setC(nc))return;rl(nc,w,log,end,setC).catch(e=>le('rl error',e?.message));
   };
-  const openU=async(p,first,vh)=>{if(p.port!==53)throw new Error('Invalid UDP port');dw=await hU(w,vh,log,end);dns=true;if(first?.byteLength)await dw.write(first)};
+  const openU=async(p,first,vh)=>{if(p.port!==53)throw new Error('Invalid UDP port');const ndw=await hU(w,vh,log,end);if(closed){closeAll(ndw);return}dw=ndw;dns=true;if(first?.byteLength)await dw.write(first)};
   const pump=async()=>{if(busy||closed)return;busy=true;try{for(;;){if(closed||hold)break;const[d]=q.pack();if(!d)break;if(dns&&dw){await dw.write(d);continue}if(c?.w){await c.w.write(d);continue}await open(d)}}catch(e){log('write error',e?.message);end()}finally{busy=false;if(!q.empty&&!closed&&!hold)queueMicrotask(pump)}};
   const eh=r.headers.get('sec-websocket-protocol')||'',ed=eh.length<=K.ed*4/3+4?b64(eh):null;if(ed&&ed.byteLength<=K.ed&&add(ed))pump();
   w.addEventListener('message',e=>{if(!closed&&add(e.data))pump()});w.addEventListener('close',end);w.addEventListener('error',end);
@@ -162,8 +162,8 @@ async function rl(c,w,log,end,setC){
       tx.flush();log(`remote readable close with hasIncomingData is ${has}`);
     }catch(e){err=e;try{tx.flush()}catch{}}finally{closeAll(r)}
     if(!has&&c.retry&&w.readyState===WebSocket.OPEN){
-      const old=c;setC(null,true);closeAll(old);log('retry fallback');
-      try{c=await old.retry();setC(c);continue}catch(e){log(`fallback failed: ${e?.message}`)}
+      const old=c;if(!setC(null,true)){closeAll(old);return}closeAll(old);log('retry fallback');
+      try{c=await old.retry();if(!setC(c))return;continue}catch(e){log(`fallback failed: ${e?.message}`)}
     }
     if(err&&!quiet(err))le('remoteSocketToWS has exception',err?.stack||err);
     end();return;
