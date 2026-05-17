@@ -1,7 +1,9 @@
 /*
  本项目仅作为学习使用，请勿用于非法用途。
 */
-const V='3.1.0';
+import{connect as C}from'cloudflare:sockets';
+
+const V='3.1.1';
 const U='aaa6b096-1165-4bbe-935c-99f4ec902d02';
 const P='txt@kr.william.dwb.cc.cd';
 const S5='';
@@ -9,7 +11,7 @@ const GS5=false;
 const D=false;
 const SUB='sub.glimmer.hidns.vip';
 const UID='ikun';
-const K={to:6000,ed:8*1024,up:16*1024,uq:256*1024,rd:64*1024,dn:32*1024,dt:512,tc:64};
+const K={to:6000,ed:8*1024,up:16*1024,uq:256*1024,rd:64*1024,dn:32*1024,dt:512,tc:64,ct:3*60*60*1000};
 
 if(!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(U))throw new Error('Invalid UUID');
 
@@ -40,11 +42,6 @@ const quiet=e=>/cancel|closed|aborted/i.test(e?.message||'');
 const rel=x=>{try{x?.releaseLock?.()}catch{}};
 const closeOne=x=>{try{const p=x?.close?.();if(p?.finally)return p.catch?.(()=>{}).finally(()=>rel(x))}catch{}rel(x)};
 const closeAll=(...a)=>{for(const x of a){if(!x)continue;if(x.sock||x.w)closeAll(x.w,x.sock);else closeOne(x)}};
-const dial=r=>{
-  if(!r.fetcher?.connect)throw new Error('connect unavailable');
-  return r.fetcher.connect.bind(r.fetcher);
-};
-
 const qP=(u,k)=>{
   const q=u.pathname.slice(1)+(u.search?'&'+u.search.slice(1):'');
   for(const p of q.split('&')){
@@ -97,25 +94,24 @@ async function fTO(u,i){const a=new AbortController(),t=setTimeout(()=>a.abort()
 async function qT(d){
   try{
     const r=await fTO(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(d)}&type=TXT`,{headers:{accept:'application/dns-json'}});
-    if(!r.ok)return null;const j=await r.json(),a=j.Answer?.filter(x=>x.type===16)||[];if(!a.length)return null;
-    return{ttl:Math.min(...a.map(x=>Number(x.TTL)||0))*1000,txt:a.map(x=>x.data)};
+    if(!r.ok)return null;const j=await r.json();return j.Answer?.filter(x=>x.type===16).map(x=>x.data)||null;
   }catch{return null}
 }
 async function pT(d){
   const n=Date.now();for(const[k,v]of tc)if(v.exp<=n)tc.delete(k);
   const c=tc.get(d);if(c&&n<c.exp){tc.delete(d);tc.set(d,c);return c.v}
   if(tp.has(d))return tp.get(d);
-  const p=(async()=>{const r=await qT(d);if(!r?.txt?.length){lg(`[pT] TXT query failed: ${d}`);return null}const v=r.txt.flatMap(x=>eT(x).split(',')).map(x=>x.trim()).filter(Boolean).map(vE).filter(Boolean);if(!v.length)return null;if(r.ttl>0){tc.set(d,{v,exp:Date.now()+r.ttl});while(tc.size>K.tc)tc.delete(tc.keys().next().value)}return v})();
+  const p=(async()=>{const r=await qT(d);if(!r?.length){lg(`[pT] TXT query failed: ${d}`);return null}const v=r.flatMap(x=>eT(x).split(',')).map(x=>x.trim()).filter(Boolean).map(vE).filter(Boolean);if(!v.length)return null;tc.set(d,{v,exp:Date.now()+K.ct});while(tc.size>K.tc)tc.delete(tc.keys().next().value);return v})();
   tp.set(d,p);try{return await p}finally{tp.delete(d)}
 }
 
 function ws(r,px,s5,gs5){
-  const[client,w]=Object.values(new WebSocketPair());w.binaryType='arraybuffer';w.accept({allowHalfOpen:true});
+  const[client,w]=Object.values(new WebSocketPair());w.binaryType='arraybuffer';w.accept();
   const pd=tH(px);if(pd)pT(pd).catch(e=>lg(`[pT] warmup failed: ${e?.message}`));
-  const dc=dial(r);let c=null,dw=null,dns=false,closed=false,busy=false,hold=false,addr='',pl='';
+  const dc=C;let c=null,dw=null,dns=false,closed=false,busy=false,hold=false,addr='',pl='';
   const q=mkQ(K.up,K.uq,K.uq>>8),log=(i,e)=>lg(`[${addr}:${pl}] ${i}`,e||'');
   const setC=(x,p=false)=>{if(closed){closeAll(x);return 0}c=x;hold=p;if(!hold&&!q.empty)pump();return 1};
-  const end=()=>{if(closed)return;closed=true;q.clear();closeAll(dw,c,w);dw=null;c=null;dns=false};
+  const end=()=>{if(closed)return;closed=true;q.clear();closeAll(dw,c,w);dw=null;c=null;dns=false;hold=false};
   const add=x=>{const d=u8(x);if(!d.length)return 1;if(q.push(d))return 1;end();return 0};
   const open=async d=>{
     const p=pV(d);if(!p)throw new Error('Invalid VLESS request');
@@ -207,7 +203,7 @@ async function hU(w,vh,log,end){
 
 function pV(d){
   d=u8(d);const n=d.byteLength;if(n<24)return null;
-  const ver=d[0];if(ver!==0)return null;
+  const ver=d[0];
   if(!mU(d))return null;
   const ci=18+d[17];if(ci+4>n)return null;const cmd=d[ci];if(cmd!==1&&cmd!==2)return null;
   const port=(d[ci+1]<<8)|d[ci+2];let ai=ci+3,addr='';const at=d[ai++];
