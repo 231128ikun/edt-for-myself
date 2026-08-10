@@ -1,7 +1,7 @@
 /*
  本项目仅作为学习使用，请勿用于非法用途。
 */
-const V='3.1.7-graintcp';
+const V='3.1.8-graintcp';
 const U='aaa6b096-1165-4bbe-935c-99f4ec902d02';
 const P='txt@kr.william.dwb.cc.cd';
 const S5='';
@@ -26,12 +26,12 @@ export default{async fetch(r){
       return s?Response.redirect(`https://${s}/sub?uuid=${U}&host=${u.hostname}`,302):new Response('Missing sub param',{status:400});
     }
     if(r.headers.get('Upgrade')?.toLowerCase()!=='websocket')return u.pathname==='/'?new Response(`mini v${V}`,{status:200}):new Response(null,{status:404});
-    const px=qP(u,'p')||P,s5=qP(u,'s5')||S5,gm=qP(u,'gs5');
-    return ws(r,px,s5,gm!==null?(gm==='1'||gm.toLowerCase()==='true'):GS5);
-  }catch(e){return new Response('Error: '+(e?.message||'unknown'),{status:502})}
+    const px=qP(u,'p')||P,s5=qP(u,'s5')||S5,gs5=qP(u,'gs5');
+    return ws(r,px,s5,gs5===null||gs5===''?GS5:/^(1|true|on|yes)$/i.test(gs5.trim()));
+  }catch(e){return new Response(D?'Error: '+(e?.message||'unknown'):'Error',{status:502})}
 }};
 
-const race=(p,ms=K.to)=>{let t;return Promise.race([p,new Promise((_,r)=>{t=setTimeout(()=>r(new Error('timeout')),ms)})]).finally(()=>clearTimeout(t))};
+const race=(p,ms=K.to)=>{let t;return Promise.race([p,new Promise((_,r)=>{t=setTimeout(()=>{Promise.resolve(p).catch(()=>{});r(new Error('timeout'))},ms)})]).finally(()=>clearTimeout(t))};
 const u8=x=>x instanceof Uint8Array?x:x instanceof ArrayBuffer?new Uint8Array(x):ArrayBuffer.isView(x)?new Uint8Array(x.buffer,x.byteOffset,x.byteLength):z;
 const b64=s=>{if(!s)return null;try{let x=s.replace(/-/g,'+').replace(/_/g,'/');x=x.padEnd(Math.ceil(x.length/4)*4,'=');return Uint8Array.from(atob(x),c=>c.charCodeAt(0))}catch{return null}};
 const cat=(...a)=>{const l=a.map(u8),o=new Uint8Array(l.reduce((n,x)=>n+x.length,0));let p=0;for(const x of l){o.set(x,p);p+=x.length}return o};
@@ -49,9 +49,12 @@ const closeAll=async(...a)=>{
   a.forEach(add);await Promise.allSettled(p);
 };
 const qP=(u,k)=>{
-  const q=u.pathname.slice(1)+(u.search?'&'+u.search.slice(1):'');
-  for(const p of q.split('&')){
-    const i=p.indexOf('='),a=i<0?p:p.slice(0,i),v=i<0?'':p.slice(i+1);
+  const segs=[...u.pathname.slice(1).split(/[&/]/),...(u.search?u.search.slice(1).split('&'):[])];
+  for(const p of segs){
+    if(!p)continue;
+    let i=p.indexOf('='),n=1,j=p.search(/%3[Dd]/);
+    if(j>-1&&(i<0||j<i)){i=j;n=3}
+    const a=i<0?p:p.slice(0,i),v=i<0?'':p.slice(i+n);
     try{if(decodeURIComponent(a)===k)return decodeURIComponent(v)}catch{if(a===k)return v}
   }
   return null;
@@ -99,7 +102,7 @@ function gD(w){
 }
 
 const tH=s=>/^txt@/i.test(s||'')?String(s).slice(4).trim():'';
-const eT=s=>s.replace(/^"|"$/g,'').replace(/"\s*"/g,'').replace(/\\010/g,',').replace(/\\,/g,',').replace(/\r?\n/g,',');
+const eT=s=>s.replace(/^"|"$/g,'').replace(/"\s*"/g,'').replace(/\\010|\\,|\r?\n/g,',');
 const vE=s=>{const[h,p]=pH(s,443);return h&&(iV(h)||/^[a-z0-9.-]+$/i.test(h)||h.includes(':'))&&p>0&&p<65536?{h,p}:null};
 async function fTO(u,i,acs){const a=new AbortController(),t=setTimeout(()=>a.abort(),K.to);acs?.add(a);try{return await fetch(u,{...i,signal:a.signal})}finally{clearTimeout(t);acs?.delete(a)}}
 async function qT(d){
