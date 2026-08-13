@@ -161,7 +161,7 @@ async function pC(dc,px,p,lg=log){
 async function hC(dc,h,p,c){
   const x=await dC(dc,c.h,c.pt);let r=null;
   try{
-    const hh=h.includes(':')?`[${h}]`:h,auth=c.u||c.p?`Proxy-Authorization: Basic ${btoa((c.u||'')+':'+(c.p||''))}\r\n`:'';
+    const hh=h.includes(':')?`[${h}]`:h,auth=c.u&&c.p?`Proxy-Authorization: Basic ${btoa((c.u||'')+':'+(c.p||''))}\r\n`:'';
     x.w=x.sock.writable.getWriter();await x.w.write(TE.encode(`CONNECT ${hh}:${p} HTTP/1.1\r\nHost: ${hh}:${p}\r\n${auth}Connection: Keep-Alive\r\n\r\n`));
     r=x.sock.readable.getReader();let b=N0,s=0;
     for(;;){
