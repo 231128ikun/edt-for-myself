@@ -40,6 +40,7 @@ const dbe=(s,e)=>{if(D)console.error(s,e?.stack||e?.message||e||'')};
 const eM=e=>e?.errors?.[0]?.message||e?.message||e||'failed';
 const quiet=e=>/cancel|closed|aborted|network connection lost/i.test(e?.message||e||'');
 const rel=x=>{try{x?.releaseLock?.()}catch{}};
+const shut=x=>{if(!x)return;rel(x.w);try{x.sock?.close?.()?.catch?.(()=>{})}catch{}};
 const closeAll=async(...a)=>{
   const p=[],add=x=>{
     if(!x)return;if(x.sock||x.w||x.r)return add(x.r),add(x.w),add(x.sock);
@@ -127,50 +128,44 @@ function ws(r,px,s5,gs5){
   const pd=tH(px);if(pd)pT(pd).catch(e=>{if(!quiet(e))er('txt warmup failed',e)});
   let c=null,dw=null,closed=false,busy=false,hold=false,ut=0;
   const q=mkQ(K.up);
-  const setC=(x,p=false)=>{if(closed){void closeAll(x);return 0}c=x;hold=p;if(!hold&&!q.empty)pump();return 1};
+  const setC=(x,h=false)=>{if(closed){shut(x);return 0}c=x;hold=h;if(!hold&&!q.empty)pump();return 1};
   const end=async why=>{
     if(closed)return;if(why!=='client'&&why!=='remote')lg('end',why||'done');if(ut)clearTimeout(ut);ut=0;closed=true;q.clear();hold=false;
     const tdw=dw,tc=c;dw=null;c=null;
-    await closeAll(tdw,tc);try{if(w.readyState===WebSocket.OPEN)w.close(1000)}catch(e){if(!quiet(e))er('ws close failed',e)}
+    if(tdw)await closeAll(tdw);shut(tc);try{if(w.readyState===WebSocket.OPEN)w.close(1000)}catch(e){if(!quiet(e))er('ws close failed',e)}
   };
   const stop=why=>{end(why).catch(e=>{if(!quiet(e))er('end failed',e)})};
   const add=x=>{const d=u8(x);if(!d.length)return 1;q.push(d);return 1};
   const udpIdle=()=>{if(ut)clearTimeout(ut);ut=setTimeout(()=>stop('udp idle'),K.ui)};
   const open=async d=>{
     const p=pV(d);if(!p)throw new Error('Invalid VLESS request');
-    const vh=new Uint8Array([p.ver,0]),[first]=q.pack(d.subarray(p.idx));
+    const vh=new Uint8Array([p.ver,0]),first=d.subarray(p.idx);
     lp=`[${p.addr}:${p.port}--${Math.random()} ${p.isUDP?'udp':'tcp'}]`;
-    lg('open',`first=${first?.byteLength||0}`);
-    if(p.isUDP){if(p.port!==53)throw new Error('Invalid UDP port');dw=hU(w,vh,udpIdle,lg);if(first?.byteLength)await dw.write(first);return}
+    lg('open',`first=${first.byteLength}`);
+    if(p.isUDP){if(p.port!==53)throw new Error('Invalid UDP port');dw=hU(w,vh,udpIdle,lg);const[x]=q.pack(first);if(x?.byteLength)await dw.write(x);return}
     if(w.readyState!==WebSocket.OPEN)throw new Error('ws closed');
     w.send(vh);
-    const nc=await cn(dc,p.addr,p.port,first,px,s5,gs5,w,lg);if(!setC(nc))return;rl(nc,w,end,setC,er,lg).catch(e=>{if(!quiet(e))er('rl failed',e);stop('remote error')});
+    const nc=await cn(dc,p.addr,p.port,first,px,s5,gs5,w,lg,q);if(!setC(nc))return;rl(nc,w,end,setC,er,lg).catch(e=>{if(!quiet(e))er('rl failed',e);stop('remote error')});
   };
-  const pump=async()=>{if(busy||closed)return;busy=true;try{for(;;){if(closed||hold)break;const[d]=q.pack();if(!d)break;if(dw){if(ut)clearTimeout(ut);ut=0;await dw.write(d);continue}if(c?.w){await c.w.write(d);continue}await open(d)}}catch(e){if(!quiet(e))lg('pump error',e?.message||'error');await end('pump')}finally{busy=false;if(!q.empty&&!closed&&!hold)pump()}};
+  const pump=async()=>{if(busy||closed)return;busy=true;try{for(;;){if(closed||hold)break;const[d]=q.pack();if(!d)break;if(dw){if(ut)clearTimeout(ut);ut=0;await dw.write(d);continue}if(c?.w){c.retry=null;await c.w.write(d);continue}await open(d)}}catch(e){if(!quiet(e))lg('pump error',e?.message||'error');await end('pump')}finally{busy=false;if(!q.empty&&!closed&&!hold)pump()}};
   const ed=eh.length<=K.ed*4/3+4?b64(eh):null;if(ed&&ed.byteLength<=K.ed&&add(ed))pump();
   w.addEventListener('message',e=>{if(!closed&&add(e.data))pump()});w.addEventListener('close',()=>stop('client'));w.addEventListener('error',()=>stop('client error'));
   return new Response(null,{status:101,webSocket:client,headers:{'Sec-WebSocket-Extensions':''}});
 }
 
-async function cn(dc,addr,port,data,px,s5,gs5,w,lg){
-  data=data||z;
+async function cn(dc,addr,port,data,px,s5,gs5,w,lg,q){
+  data=data||z;let first=null;
   const cfg=s5?pS(s5):null,fb=()=>cfg?cfg.isHttp?hC(dc,addr,port,cfg):sC(dc,addr,port,cfg):pC(dc,px,port,lg);
-  const use=async c=>{try{if(w.readyState!==WebSocket.OPEN)throw new Error('closed');c.w||=c.sock.writable.getWriter();if(data.length)await c.w.write(data);return c}catch(e){await closeAll(c);throw e}};
+  const use=async c=>{try{if(w.readyState!==WebSocket.OPEN)throw new Error('closed');c.w||=c.sock.writable.getWriter();if(first===null)[first]=q.pack(data);if(first?.length)await c.w.write(first);return c}catch(e){await closeAll(c);throw e}};
   const useFb=async()=>{try{if(cfg)lg('fallback proxy',`${cfg.h}:${cfg.pt}`);return await use(await fb())}catch(e){if(cfg)lg('proxy failed',`${cfg.h}:${cfg.pt} ${eM(e)}`);throw e}};
   if(gs5&&cfg)return useFb();
   try{const c=await use(await dC(dc,addr,port));c.retry=useFb;return c}catch(e){if(w.readyState!==WebSocket.OPEN)throw e;lg('direct failed',`${addr}:${port} ${eM(e)}`);return useFb()}
 }
 
 async function dC(dc,h,p){
-  const sock=dc({hostname:h,port:p});
-  try{
-    await race(sock.opened);
-    return{sock}
-  }catch(e){
-    await closeAll(sock);
-    throw e
-  }
+  const sock=dc({hostname:h,port:p});try{await sock.opened;return{sock}}catch(e){await closeAll(sock);throw e}
 }
+
 async function pC(dc,px,port,lg){
   const d=tH(px);
   const dP=(h,p)=>{lg('fallback proxy',`${h}:${p}`);return dC(dc,h,p).catch(e=>{lg('proxy failed',`${h}:${p} ${eM(e)}`);throw e})};
@@ -178,10 +173,9 @@ async function pC(dc,px,port,lg){
   const[h,p]=pH(px,port);return dP(h,p);
 }
 async function rl(c,w,end,setC,er,lg){
-  const tx=gD(w);let has=false,b=new ArrayBuffer(K.rd),r=null;
+  const tx=gD(w);let b=new ArrayBuffer(K.rd);
   for(;;){
-    let err=null;
-    has=false;r=null;
+    let has=false,r=null,err=null;
     try{
       if(c.tail?.length){has=true;tx.send(c.tail);c.tail=z}
       r=c.sock.readable.getReader({mode:'byob'});c.r=r;
@@ -192,11 +186,10 @@ async function rl(c,w,end,setC,er,lg){
         else{tx.send(d.slice());b=d.buffer}
       }
       tx.end();
-    }catch(e){err=e;try{tx.end()}catch{}}finally{if(c.r===r)c.r=null;await closeAll(r)}
+    }catch(e){err=e;try{tx.end()}catch{}}finally{if(c.r===r)c.r=null;rel(r)}
     if(!has&&c.retry&&w.readyState===WebSocket.OPEN){
-      lg('retry fallback','no remote data');
-      const old=c;if(!setC(null,true)){await closeAll(old);return}await closeAll(old);
-      try{c=await old.retry();if(!setC(c))return;continue}catch(e){err=e}
+      lg('retry fallback','no remote data');const old=c,retry=c.retry;c.retry=null;if(!setC(null,true)){shut(old);return}shut(old);
+      try{c=await retry();if(!setC(c))return;b=new ArrayBuffer(K.rd);continue}catch(e){err=e}
     }
     if(err&&!quiet(err))er('remoteSocketToWS has exception',err);
     await end('remote');return;

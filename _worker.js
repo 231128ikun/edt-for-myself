@@ -137,21 +137,13 @@ function hU(w,vh,done,lg=log){
     if(i<d.length)b=d.slice(i);
   },close,abort:close};
 }
-async function rW(c,w,vh,end,setC,er=bad,lg=log){
+async function rW(c,w,vh,end,er=bad){
   let h=vh,err=null;
-  for(;;){
-    let ok=false;
-    const send=d=>{d=u8(d);if(!d.length)return;if(w.readyState!==WebSocket.OPEN)throw new Error('ws closed');ok=true;if(h){w.send(cat(h,d));h=null}else w.send(d)};
-    try{
-      if(c.tail?.length){send(c.tail);c.tail=N0}
-      await c.sock.readable.pipeTo(new WritableStream({write(ch){send(ch)},abort(r){err=r||new Error('remote abort')}}));
-    }catch(e){err=e}
-    if(ok||!c.retry||w.readyState!==WebSocket.OPEN)break;
-    lg('retry fallback','no remote data');
-    const o=c,nf=cln(o).then(()=>o.retry());
-    if(!setC(nf))return;
-    try{c=await nf;err=null}catch(e){err=e;break}
-  }
+  const send=d=>{d=u8(d);if(!d.length)return;if(w.readyState!==WebSocket.OPEN)throw new Error('ws closed');if(h){w.send(cat(h,d));h=null}else w.send(d)};
+  try{
+    if(c.tail?.length){send(c.tail);c.tail=N0}
+    await c.sock.readable.pipeTo(new WritableStream({write:send,abort(r){err=r||new Error('remote abort')}}));
+  }catch(e){err=e}
   if(err&&!endE(err))er('remoteSocketToWS has exception',err);
   await end('remote');
 }
@@ -198,7 +190,7 @@ async function cn(dc,h,p,data,px,s5,gs5,w,lg=log){
   const use=async c=>{try{if(w.readyState!==WebSocket.OPEN)throw new Error('closed');c.w||=c.sock.writable.getWriter();if(data.length)await c.w.write(data);return c}catch(e){await cln(c);throw e}};
   const uf=async()=>{try{if(g)lg('fallback proxy',`${g.h}:${g.pt}`);return await use(await fb())}catch(e){if(g)lg('proxy failed',`${g.h}:${g.pt} ${eM(e)}`);throw e}};
   if(gs5&&g)return uf();
-  try{const c=await use(await dC(dc,h,p));c.retry=uf;return c}catch(e){if(w.readyState!==WebSocket.OPEN)throw e;lg('direct failed',`${h}:${p} ${eM(e)}`);return uf()}
+  try{return await use(await dC(dc,h,p))}catch(e){if(w.readyState!==WebSocket.OPEN)throw e;lg('direct failed',`${h}:${p} ${eM(e)}`);return uf()}
 }
 
 function wH(r,px,s5,gs5){
@@ -224,7 +216,7 @@ function wH(r,px,s5,gs5){
     if(p.isUDP){if(p.port!==53)throw new Error('Invalid UDP port');uw=hU(ws,vh,idle,lg);if(f.byteLength)await uw.write(f);return}
     const n=await cn(dc,p.addr,p.port,f,px,s5,gs5,ws,lg);
     if(!setC(n))return;
-    rW(n,ws,vh,end,setC,er,lg).catch(e=>{if(!endE(e))er('rl failed',e);stop('remote error')});
+    rW(n,ws,vh,end,er).catch(e=>{if(!endE(e))er('rl failed',e);stop('remote error')});
   };
   wR(ws,eh).pipeTo(new WritableStream({
     async write(ch){
