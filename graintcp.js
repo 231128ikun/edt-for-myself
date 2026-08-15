@@ -241,7 +241,6 @@ function hU(w,vh,done,lg){
     let d=u8(ch),i=0;if(cache.length){d=cat(cache,d);cache=z}
     for(;i+2<=d.length;){const l=(d[i]<<8)|d[i+1];if(i+2+l>d.length)break;await send(d.slice(i+2,i+2+l));i+=2+l}
     if(i<d.length)cache=d.slice(i);
-    if(cache.length>4096)cache=z;
   },close,abort:close};
 }
 

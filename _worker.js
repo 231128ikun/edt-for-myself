@@ -134,7 +134,7 @@ function hU(w,vh,done,lg=log){
     if(off)return;
     let d=u8(ch),i=0;if(b.length){d=cat(b,d);b=N0}
     for(;i+2<=d.length;){const l=(d[i]<<8)|d[i+1];if(i+2+l>d.length)break;await send(d.slice(i+2,i+2+l));i+=2+l}
-    if(i<d.length)b=d.slice(i);if(b.length>4096)b=N0;
+    if(i<d.length)b=d.slice(i);
   },close,abort:close};
 }
 async function rW(c,w,vh,end,setC,er=bad,lg=log){
@@ -148,7 +148,7 @@ async function rW(c,w,vh,end,setC,er=bad,lg=log){
     }catch(e){err=e}
     if(ok||!c.retry||w.readyState!==WebSocket.OPEN)break;
     lg('retry fallback','no remote data');
-    const o=c,nf=Promise.all([cln(o),o.retry()]).then(a=>a[1]);
+    const o=c,nf=cln(o).then(()=>o.retry());
     if(!setC(nf))return;
     try{c=await nf;err=null}catch(e){err=e;break}
   }
@@ -214,7 +214,7 @@ function wH(r,px,s5,gs5){
     if(off)return;if(why!=='client'&&why!=='remote')lg('end',why||'done');off=true;
     clearTimeout(ut);ut=0;
     const ou=uw,oc=cur;uw=null;cur=null;
-    dis(oc);await cln(ou);try{if(ws.readyState===WebSocket.OPEN)ws.close(1000)}catch(e){if(!endE(e))er('ws close failed',e)}
+    try{if(ws.readyState===WebSocket.OPEN)ws.close(1000)}catch(e){if(!endE(e))er('ws close failed',e)}dis(oc);await cln(ou)
   };
   const stop=why=>{end(why).catch(e=>{if(!endE(e))er('end failed',e)})},idle=()=>{clearTimeout(ut);ut=setTimeout(()=>stop('udp idle'),K.ui)};
   const open=async d=>{

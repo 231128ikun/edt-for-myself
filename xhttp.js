@@ -88,10 +88,12 @@ function pV(d){
 
 function mkOW(wr){
   let st=OK;
+  const closed=wr.closed.then(()=>{st=3},()=>{st=3});
   return{
     get readyState(){return st},
-    send(d){if(st!==OK)return;try{wr.write(u8(d)).catch(()=>{st=3})}catch{st=3}},
-    close(){if(st===OK){st=3;try{wr.close()}catch{}}}
+    closed,
+    async send(d){if(st!==OK)throw new Error('output closed');try{await wr.write(u8(d))}catch(e){st=3;throw e}},
+    async close(){if(st!==OK)return;st=3;try{await wr.close()}catch{}}
   };
 }
 
@@ -121,29 +123,29 @@ function hU(w,vh,done,lg=log){
       if(!r.ok){lg('udp doh status',String(r.status));return}
       const d=new Uint8Array(await r.arrayBuffer()),l=new Uint8Array([d.length>>8,d.length&255]);
       if(off||w.readyState!==OK)return;
-      w.send(ok?cat(l,d):cat(vh,l,d));ok=true;done?.();
-    }catch(e){if(!off&&!endE(e))lg('udp doh error',e?.message||'error')}
+      await w.send(ok?cat(l,d):cat(vh,l,d));ok=true;done?.();
+    }catch(e){if(w.readyState!==OK)throw e;if(!off&&!endE(e))lg('udp doh error',e?.message||'error')}
   };
   const close=()=>{off=true;b=N0;for(const a of as)a.abort();as.clear()};
   return{async write(ch){
     if(off)return;
     let d=u8(ch),i=0;if(b.length){d=cat(b,d);b=N0}
     for(;i+2<=d.length;){const l=(d[i]<<8)|d[i+1];if(i+2+l>d.length)break;await send(d.slice(i+2,i+2+l));i+=2+l}
-    if(i<d.length)b=d.slice(i);if(b.length>4096)b=N0;
+    if(i<d.length)b=d.slice(i);
   },close,abort:close};
 }
 async function rW(c,w,vh,end,setC,er=bad,lg=log){
   let h=vh,err=null;
   for(;;){
     let ok=false;
-    const send=d=>{d=u8(d);if(!d.length)return;if(w.readyState!==OK)throw new Error('output closed');ok=true;if(h){w.send(cat(h,d));h=null}else w.send(d)};
+    const send=async d=>{d=u8(d);if(!d.length)return;if(w.readyState!==OK)throw new Error('output closed');await w.send(h?cat(h,d):d);ok=true;h=null};
     try{
-      if(c.tail?.length){send(c.tail);c.tail=N0}
-      await c.sock.readable.pipeTo(new WritableStream({write(ch){send(ch)},abort(r){err=r||new Error('remote abort')}}));
+      if(c.tail?.length){await send(c.tail);c.tail=N0}
+      await c.sock.readable.pipeTo(new WritableStream({write:send,abort(r){err=r||new Error('remote abort')}}));
     }catch(e){err=e}
     if(ok||!c.retry||w.readyState!==OK)break;
     lg('retry fallback','no remote data');
-    const o=c,nf=Promise.all([cln(o),o.retry()]).then(a=>a[1]);
+    const o=c,nf=cln(o).then(()=>o.retry());
     if(!setC(nf))return;
     try{c=await nf;err=null}catch(e){err=e;break}
   }
@@ -200,7 +202,7 @@ function xH(r,px,s5,gs5){
   const dc=r.fetcher?.connect?.bind(r.fetcher);if(!dc)throw new Error('connect unavailable');
   let lp='';
   const lg=(a,b='')=>log(lp?`${lp} ${a}`:a,b),er=(a,e)=>bad(lp?`${lp} ${a}`:a,e);
-  const ts=new IdentityTransformStream(),ow=mkOW(ts.writable.getWriter());
+  const ts=new IdentityTransformStream(),ow=mkOW(ts.writable.getWriter()),ac=new AbortController();
   const th=txtH(px);th&&pTXT(th).catch(e=>{if(!endE(e))er('txt warmup failed',e)});
   let uw=null,off=false,cur=null,ut=0;
   const dis=x=>{if(x)Promise.resolve(x).then(v=>cln(v)).catch(()=>{})};
@@ -209,7 +211,7 @@ function xH(r,px,s5,gs5){
     if(off)return;if(why!=='client'&&why!=='remote')lg('end',why||'done');off=true;
     clearTimeout(ut);ut=0;
     const ou=uw,oc=cur;uw=null;cur=null;
-    dis(oc);await cln(ou);ow.close();
+    const co=ow.close();ac.abort();dis(oc);await Promise.all([cln(ou),co]);
   };
   const stop=why=>{end(why).catch(e=>{if(!endE(e))er('end failed',e)})},idle=()=>{clearTimeout(ut);ut=setTimeout(()=>stop('udp idle'),K.ui)};
   const open=async d=>{
@@ -234,7 +236,8 @@ function xH(r,px,s5,gs5){
     },
     close(){return end('client')},
     abort(){return end('client error')}
-  })).catch(e=>{if(!endE(e))er('body pipe failed',e);stop('pipe')});
-  r.signal?.addEventListener?.('abort',()=>stop('client'));
+  }),{signal:ac.signal}).catch(e=>{if(!endE(e))er('body pipe failed',e);stop('pipe')});
+  ow.closed.then(()=>stop('client'));
+  r.signal?.addEventListener?.('abort',()=>stop('client'),{once:true});
   return new Response(ts.readable,{status:200,headers:{'Content-Type':CT,'X-Accel-Buffering':'no'}});
 }
