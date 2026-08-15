@@ -14,7 +14,7 @@ const K={to:6000,ui:5000,tc:64,ct:60*60*1000};
 if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(U))throw new Error('Invalid UUID');
 
 const N0=new Uint8Array(0),TE=new TextEncoder(),TD=new TextDecoder(),UB=Uint8Array.from(U.replace(/-/g,'').match(/../g).map(x=>parseInt(x,16)));
-const DOH='https://cloudflare-dns.com/dns-query',CT='application/grpc',DM='application/dns-message',DJ='application/dns-json';
+const DOH='https://cloudflare-dns.com/dns-query',CT='application/grpc',XO='application/octet-stream',DM='application/dns-message',DJ='application/dns-json';
 const TC=new Map(),TP=new Map();
 const isU=d=>UB.every((x,i)=>d[i+1]===x);
 const OK=1;
@@ -32,7 +32,7 @@ const isX=r=>r.method==='POST'&&!!r.body&&(r.headers.get('content-type')||'').to
 const rc=(p,ms=K.to)=>{let t;return Promise.race([p,new Promise((_,r)=>{t=setTimeout(()=>{Promise.resolve(p).catch(()=>{});r(new Error('timeout'))},ms)})]).finally(()=>clearTimeout(t))};
 const u8=x=>x instanceof Uint8Array?x:x instanceof ArrayBuffer?new Uint8Array(x):ArrayBuffer.isView(x)?new Uint8Array(x.buffer,x.byteOffset,x.byteLength):N0;
 const cat=(...a)=>{const l=a.map(u8),o=new Uint8Array(l.reduce((n,x)=>n+x.length,0));let p=0;for(const x of l){o.set(x,p);p+=x.length}return o};
-const log=(s,x='')=>D&&console.log(`${s}${x?' '+x:''}`),bad=(s,e)=>D&&console.error(s,e?.stack||e?.message||e||'');
+const log=(s,x='')=>D&&console.log(`${s}${x?' '+x:''}`);
 const eM=e=>e?.errors?.[0]?.message||e?.message||e||'failed';
 const endE=e=>/cancel|closed|aborted|network connection lost/i.test(e?.message||e||'');
 const unl=x=>{try{x?.releaseLock?.()}catch{}};
@@ -74,16 +74,27 @@ function s5P(s){
   const up=at!==-1?s.slice(0,at):'',i=up.indexOf(':');
   return{u:i<0?'':up.slice(0,i),p:i<0?'':up.slice(i+1),h,pt,isHttp:iH};
 }
-function pV(d){
-  d=u8(d);const n=d.byteLength;if(n<24)return null;
-  const v=d[0];if(!isU(d))return null;
-  const i=18+d[17];if(i+4>n)return null;const c=d[i];if(c!==1&&c!==2)return null;
+function pV(d,w){
+  d=u8(d);const n=d.byteLength,m=w?0:null;if(n<17)return m;
+  const v=d[0];if(!isU(d))return null;if(n<18)return m;
+  const i=18+d[17];if(i+4>n)return m;const c=d[i];if(c!==1&&c!==2)return null;
   const p=(d[i+1]<<8)|d[i+2];let j=i+3,h='';const a=d[j++];
-  if(a===1){if(j+4>n)return null;h=d.slice(j,j+4).join('.');j+=4}
-  else if(a===2){if(j>=n)return null;const l=d[j++];if(!l||j+l>n)return null;h=TD.decode(d.slice(j,j+l));j+=l}
-  else if(a===3){if(j+16>n)return null;h=v6s(d.buffer,d.byteOffset+j);j+=16}
+  if(a===1){if(j+4>n)return m;h=d.slice(j,j+4).join('.');j+=4}
+  else if(a===2){if(j>=n)return m;const l=d[j++];if(!l)return null;if(j+l>n)return m;h=TD.decode(d.slice(j,j+l));j+=l}
+  else if(a===3){if(j+16>n)return m;h=v6s(d.buffer,d.byteOffset+j);j+=16}
   else return null;
   return{addr:h,port:p,idx:j,ver:v,isUDP:c===2};
+}
+async function rV(b){
+  const r=b.getReader();let d=N0;
+  try{
+    for(;;){
+      const{value,done}=await r.read();if(done)throw new Error('Incomplete VLESS request');
+      const x=u8(value);if(!x.length)continue;d=d.length?cat(d,x):x.slice();
+      const p=pV(d,1);if(p===0){if(d.length>8192)throw new Error('VLESS header too large');continue}if(!p)throw new Error('Invalid VLESS request');
+      unl(r);return{p,f:d.subarray(p.idx)};
+    }
+  }catch(e){await cln(r);throw e}
 }
 
 function mkOW(wr){
@@ -134,25 +145,6 @@ function hU(w,vh,done,lg=log){
     if(i<d.length)b=d.slice(i);
   },close,abort:close};
 }
-async function rW(c,w,vh,end,setC,er=bad,lg=log){
-  let h=vh,err=null;
-  for(;;){
-    let ok=false;
-    const send=async d=>{d=u8(d);if(!d.length)return;if(w.readyState!==OK)throw new Error('output closed');await w.send(h?cat(h,d):d);ok=true;h=null};
-    try{
-      if(c.tail?.length){await send(c.tail);c.tail=N0}
-      await c.sock.readable.pipeTo(new WritableStream({write:send,abort(r){err=r||new Error('remote abort')}}));
-    }catch(e){err=e}
-    if(ok||!c.retry||w.readyState!==OK)break;
-    lg('retry fallback','no remote data');
-    const o=c,nf=cln(o).then(()=>o.retry());
-    if(!setC(nf))return;
-    try{c=await nf;err=null}catch(e){err=e;break}
-  }
-  if(err&&!endE(err))er('remoteSocketToWS has exception',err);
-  await end('remote');
-}
-
 async function dC(dc,h,p){const sock=dc({hostname:h,port:p});try{await rc(sock.opened);return{sock}}catch(e){await cln(sock);throw e}}
 async function pC(dc,px,p,lg=log){
   const d=txtH(px);
@@ -189,55 +181,49 @@ async function sC(dc,h,p,c){
     if(b.length)x.tail=b;unl(r);return x;
   }catch(e){await cln(r,x);throw e}
 }
-async function cn(dc,h,p,data,px,s5,gs5,w,lg=log){
-  data||=N0;
+async function cn(dc,h,p,px,s5,gs5,lg=log){
   const g=s5?s5P(s5):null,fb=()=>g?g.isHttp?hC(dc,h,p,g):sC(dc,h,p,g):pC(dc,px,p,lg);
-  const use=async c=>{try{if(w.readyState!==OK)throw new Error('closed');c.w||=c.sock.writable.getWriter();if(data.length)await c.w.write(data);return c}catch(e){await cln(c);throw e}};
-  const uf=async()=>{try{if(g)lg('fallback proxy',`${g.h}:${g.pt}`);return await use(await fb())}catch(e){if(g)lg('proxy failed',`${g.h}:${g.pt} ${eM(e)}`);throw e}};
+  const uf=async()=>{try{if(g)lg('fallback proxy',`${g.h}:${g.pt}`);return await fb()}catch(e){if(g)lg('proxy failed',`${g.h}:${g.pt} ${eM(e)}`);throw e}};
   if(gs5&&g)return uf();
-  try{const c=await use(await dC(dc,h,p));c.retry=uf;return c}catch(e){if(w.readyState!==OK)throw e;lg('direct failed',`${h}:${p} ${eM(e)}`);return uf()}
+  try{const c=await dC(dc,h,p);c.retry=uf;return c}catch(e){lg('direct failed',`${h}:${p} ${eM(e)}`);return uf()}
 }
 
-function xH(r,px,s5,gs5){
+function uH(r,p,f,lg){
+  const ts=new IdentityTransformStream(),ow=mkOW(ts.writable.getWriter()),ac=new AbortController(),uw=hU(ow,new Uint8Array([p.ver,0]),idle,lg);
+  let off=false,ut=0;
+  function idle(){clearTimeout(ut);ut=setTimeout(stop,K.ui)}
+  const end=async()=>{if(off)return;off=true;clearTimeout(ut);ac.abort();await Promise.all([cln(uw,r.body),ow.close()])};
+  const stop=()=>end().catch(e=>{if(!endE(e))lg('end failed',eM(e))});
+  (async()=>{
+    if(f.length)await uw.write(f);
+    await r.body.pipeTo(new WritableStream({async write(ch){clearTimeout(ut);ut=0;await uw.write(ch)}}),{signal:ac.signal});
+    await end();
+  })().catch(e=>{if(!endE(e))lg('body pipe failed',eM(e));stop()});
+  ow.closed.then(stop);
+  return new Response(ts.readable,{status:200,headers:{'Content-Type':XO,'Cache-Control':'no-store','X-Accel-Buffering':'no'}});
+}
+
+async function xH(r,px,s5,gs5){
   const dc=r.fetcher?.connect?.bind(r.fetcher);if(!dc)throw new Error('connect unavailable');
-  let lp='';
-  const lg=(a,b='')=>log(lp?`${lp} ${a}`:a,b),er=(a,e)=>bad(lp?`${lp} ${a}`:a,e);
-  const ts=new IdentityTransformStream(),ow=mkOW(ts.writable.getWriter()),ac=new AbortController();
-  const th=txtH(px);th&&pTXT(th).catch(e=>{if(!endE(e))er('txt warmup failed',e)});
-  let uw=null,off=false,cur=null,ut=0;
-  const dis=x=>{if(x)Promise.resolve(x).then(v=>cln(v)).catch(()=>{})};
-  const setC=x=>{if(off){dis(x);return 0}cur=Promise.resolve(x);return 1};
-  const end=async why=>{
-    if(off)return;if(why!=='client'&&why!=='remote')lg('end',why||'done');off=true;
-    clearTimeout(ut);ut=0;
-    const ou=uw,oc=cur;uw=null;cur=null;
-    const co=ow.close();ac.abort();dis(oc);await Promise.all([cln(ou),co]);
-  };
-  const stop=why=>{end(why).catch(e=>{if(!endE(e))er('end failed',e)})},idle=()=>{clearTimeout(ut);ut=setTimeout(()=>stop('udp idle'),K.ui)};
-  const open=async d=>{
-    const p=pV(d);if(!p)throw new Error('Invalid VLESS request');
-    const vh=new Uint8Array([p.ver,0]),f=d.subarray(p.idx);
-    if(D)lp=`[${p.addr}:${p.port}--${Math.random()} ${p.isUDP?'udp':'tcp'}]`;lg('open',`first=${f.byteLength}`);
-    if(p.isUDP){if(p.port!==53)throw new Error('Invalid UDP port');uw=hU(ow,vh,idle,lg);if(f.byteLength)await uw.write(f);return}
-    const n=await cn(dc,p.addr,p.port,f,px,s5,gs5,ow,lg);
-    if(!setC(n))return;
-    rW(n,ow,vh,end,setC,er,lg).catch(e=>{if(!endE(e))er('rl failed',e);stop('remote error')});
-  };
-  r.body.pipeTo(new WritableStream({
-    async write(ch){
-      try{
-        if(off)return;
-        const d=u8(ch);if(!d.length)return;
-        if(uw){clearTimeout(ut);ut=0;await uw.write(d);return}
-        if(!cur)return open(d);
-        const cc=await cur;if(!cc)return;
-        cc.w||=cc.sock.writable.getWriter();await cc.w.write(d);
-      }catch(e){if(!endE(e))lg('pump error',e?.message||'error');await end('pump')}
-    },
-    close(){return end('client')},
-    abort(){return end('client error')}
-  }),{signal:ac.signal}).catch(e=>{if(!endE(e))er('body pipe failed',e);stop('pipe')});
-  ow.closed.then(()=>stop('client'));
-  r.signal?.addEventListener?.('abort',()=>stop('client'),{once:true});
-  return new Response(ts.readable,{status:200,headers:{'Content-Type':CT,'X-Accel-Buffering':'no'}});
+  let lp='';const lg=(a,b='')=>log(lp?`${lp} ${a}`:a,b);
+  let h;try{h=await rV(r.body)}catch{return new Response('bad request',{status:400})}
+  const{p,f}=h;if(p.isUDP){if(p.port!==53){await cln(r.body);return new Response('bad request',{status:400})}return uH(r,p,f,lg)}
+  if(D)lp=`[${p.addr}:${p.port}--${Math.random()} tcp]`;lg('open',`first=${f.length}`);
+  const th=txtH(px);th&&pTXT(th).catch(e=>{if(!endE(e))lg('txt warmup failed',eM(e))});
+  let c;try{c=await cn(dc,p.addr,p.port,px,s5,gs5,lg)}catch(e){if(!endE(e))lg('connect error',eM(e));await cln(r.body);return new Response('bad gateway',{status:502})}
+  const ts=new IdentityTransformStream(),a=new AbortController();let off=false;
+  const end=e=>{if(off)return;off=true;try{a.abort(e)}catch{}void cln(c)};
+  const up=(async()=>{
+    const w=c.w||c.sock.writable.getWriter();try{if(f.length)await w.write(f)}finally{unl(w)}
+    await r.body.pipeTo(c.sock.writable,{signal:a.signal});
+  })();
+  const down=(async()=>{
+    const w=ts.writable.getWriter();
+    try{await w.write(new Uint8Array([p.ver,0]));if(c.tail?.length){await w.write(c.tail);c.tail=N0}}
+    catch(e){try{await w.abort(e)}catch{}throw e}
+    finally{unl(w)}
+    await c.sock.readable.pipeTo(ts.writable,{signal:a.signal});
+  })();
+  void up.catch(end);void down.then(()=>end(),end);void Promise.allSettled([up,down]);
+  return new Response(ts.readable,{status:200,headers:{'Content-Type':XO,'Cache-Control':'no-store','X-Accel-Buffering':'no'}});
 }
