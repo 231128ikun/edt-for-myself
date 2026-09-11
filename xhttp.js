@@ -7,8 +7,6 @@ const P='txt@kr.william.dwb.cc.cd';
 const S5='';
 const GS5=false;
 const D=false;
-const SUB='sub.glimmer.hidns.vip';
-const UID='ikun';
 const K={to:6000,ui:5000,tc:64,ct:60*60*1000};
 
 if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(U))throw new Error('Invalid UUID');
@@ -21,7 +19,6 @@ const OK=1;
 export default{async fetch(r){
   try{
     const u=new URL(r.url);
-    if(UID&&u.pathname==='/'+UID){const s=u.searchParams.get('sub')||SUB;return s?Response.redirect(`https://${s}/sub?uuid=${U}&host=${u.hostname}`,302):new Response('Missing sub param',{status:400})}
     if(!isX(r))return u.pathname==='/'?new Response(`mini v${V}`,{status:200}):new Response(null,{status:404});
     const px=qP(u,'p')||P,s5=qP(u,'s5')||S5,gs5=qP(u,'gs5');
     return xH(r,px,s5,gs5===null||gs5===''?GS5:/^(1|true|on|yes)$/i.test(gs5.trim()));
